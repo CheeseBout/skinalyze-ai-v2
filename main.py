@@ -210,7 +210,7 @@ def load_skin_condition_model():
         return None
 
 def load_segmentation_model():
-    """Load SAM2 segmentation model (Robust Path Fix)"""
+    """Load SAM2 segmentation model (Fixed Relative Path for Hydra)"""
     model_path = MODEL_PATHS['segmentation']
     if not os.path.exists(model_path):
         print(f"⚠️  Segmentation model not found")
@@ -219,48 +219,14 @@ def load_segmentation_model():
     try:
         from sam2.build_sam import build_sam2
         from sam2.sam2_image_predictor import SAM2ImagePredictor
-        import sam2
         
+        # Load checkpoint
         checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-        if not isinstance(checkpoint, dict) or 'config' not in checkpoint:
-            return None
         
-        config = checkpoint['config']
-        sam2_config = config.get('sam2_config', 'sam2.1_hiera_t')
-        
-        # --- FIX: Hardcode config path mapping ---
-        # Thay vì tìm trong thư viện hệ thống (hay bị lỗi), ta định nghĩa file config chuẩn
-        # Lưu ý: Trong Docker, ta sẽ tải file config này về nếu không tìm thấy
-        config_map = {
-            'sam2.1_hiera_t': 'sam2.1_hiera_t.yaml',
-            'sam2.1_hiera_s': 'sam2.1_hiera_s.yaml',
-            'sam2.1_hiera_b+': 'sam2.1_hiera_b+.yaml',
-            'sam2.1_hiera_l': 'sam2.1_hiera_l.yaml',
-        }
-        
-        config_name = config_map.get(sam2_config, 'sam2.1_hiera_t.yaml')
-        
-        # 1. Tìm config trong thư mục cài đặt SAM2
-        sam2_root = os.path.dirname(sam2.__file__)
-        possible_paths = [
-            os.path.join(sam2_root, "configs", "sam2.1", config_name),
-            os.path.join(sam2_root, "..", "configs", "sam2.1", config_name),
-            # Đường dẫn fallback nếu không tìm thấy
-            os.path.join(BASE_DIR, "configs", config_name) 
-        ]
-        
-        config_file = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                config_file = path
-                break
-        
-        # Nếu vẫn không tìm thấy, ép dùng đường dẫn cài đặt mặc định (absolute path)
-        if config_file is None:
-             print(f"⚠️ Config file not found, trying default Hydra path search for {config_name}")
-             # Tạo đường dẫn giả định chuẩn trong Docker site-packages
-             # /usr/local/lib/python3.10/site-packages/sam2/configs/sam2.1/sam2.1_hiera_t.yaml
-             config_file = f"configs/sam2.1/{config_name}"
+        # --- FIX: Dùng đường dẫn tương đối (Relative Path) ---
+        # Hydra sẽ tự tìm file này trong folder cài đặt của thư viện sam2
+        # (File này đã được Dockerfile tải về đúng chỗ)
+        config_file = "configs/sam2.1/sam2.1_hiera_t.yaml"
 
         print(f"ℹ️ Loading SAM2 with config: {config_file}")
 
@@ -272,7 +238,7 @@ def load_segmentation_model():
             apply_postprocessing=False
         )
         
-        if 'model_state_dict' in checkpoint:
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
             sam2_model.load_state_dict(checkpoint['model_state_dict'], strict=False)
         
         predictor = SAM2ImagePredictor(sam2_model)
@@ -281,9 +247,6 @@ def load_segmentation_model():
         
     except Exception as e:
         print(f"❌ Error loading segmentation model: {e}")
-        # In traceback để debug nếu cần
-        import traceback
-        traceback.print_exc()
         return None
 
 def load_face_detection_model():
