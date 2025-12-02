@@ -149,7 +149,7 @@ def detect_skin_condition_and_types(query):
 # VECTOR STORE
 # =============================================================================
 def load_or_create_vectorstore():
-    """Load or create vector store (Robust Version from New File)"""
+    """Load or create vector store (Sửa lỗi 0 documents)"""
     global _CACHED_EMBEDDINGS
     
     print("=" * 80)
@@ -157,39 +157,59 @@ def load_or_create_vectorstore():
     print("=" * 80)
     
     try:
-        # Load embedding model
+        # 1. Load Embedding Model
         if _CACHED_EMBEDDINGS is not None:
             print(f"\n⚡ Sử dụng cached embedding model")
             embeddings = _CACHED_EMBEDDINGS
         else:
             print(f"\n⏳ Đang tải embedding model: {MODEL_NAME}...")
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            print(f"   🖥️ Sử dụng thiết bị: {device}")
-            
+            # Ép dùng CPU cho ổn định trên Hugging Face
             embeddings = HuggingFaceEmbeddings(
                 model_name=MODEL_NAME,
-                model_kwargs={'device': device},
+                model_kwargs={'device': 'cpu'},
                 encode_kwargs={'normalize_embeddings': True}
             )
             _CACHED_EMBEDDINGS = embeddings
             print("✅ Đã tải embedding model!\n")
 
-        # Load or create database
-        if os.path.exists(PERSIST_DIRECTORY):
-            print(f"📂 Loading Vector Store from: {PERSIST_DIRECTORY}")
-            db = Chroma(
-                persist_directory=str(PERSIST_DIRECTORY),
-                embedding_function=embeddings
-            )
-            count = db._collection.count() if db._collection else 0
-            print(f"✅ Loaded {count} documents\n")
-        else:
-            print(f"🆕 Creating new Vector Store from {CHUNKS_FILE.name}...\n")
+        # 2. Logic thông minh: Kiểm tra DB có dữ liệu thực sự không
+        db = None
+        should_create_new = True
+        
+        if os.path.exists(PERSIST_DIRECTORY) and len(os.listdir(PERSIST_DIRECTORY)) > 0:
+            print(f"📂 Thư mục DB tồn tại: {PERSIST_DIRECTORY}")
+            try:
+                # Thử load lên
+                db = Chroma(
+                    persist_directory=str(PERSIST_DIRECTORY),
+                    embedding_function=embeddings
+                )
+                # Kiểm tra số lượng
+                count = db._collection.count() if db._collection else 0
+                
+                if count > 0:
+                    print(f"✅ Đã load thành công {count} documents")
+                    should_create_new = False  # Có dữ liệu rồi, không cần tạo mới
+                else:
+                    print(f"⚠️  DB tồn tại nhưng RỖNG (0 docs). Sẽ tiến hành tạo lại...")
+            except Exception as e:
+                print(f"⚠️  Lỗi khi đọc DB cũ: {e}. Sẽ tạo mới...")
+        
+        # 3. Tạo mới nếu cần (Khi chưa có DB hoặc DB bị rỗng)
+        if should_create_new:
+            print(f"🆕 Bắt đầu tạo mới Vector Store từ {CHUNKS_FILE.name}...\n")
             
             if not CHUNKS_FILE.exists():
-                raise FileNotFoundError(f"File không tồn tại: {CHUNKS_FILE}")
-            
-            loader = TextLoader(str(CHUNKS_FILE), encoding='utf-8')
+                # Fallback: Nếu không thấy trong data/, thử tìm ở thư mục gốc
+                fallback_path = BASE_DIR / "product_chunks.txt"
+                if fallback_path.exists():
+                     print(f"⚠️ Không thấy file trong data/, tìm thấy ở gốc: {fallback_path}")
+                     loader = TextLoader(str(fallback_path), encoding='utf-8')
+                else:
+                     raise FileNotFoundError(f"❌ KHÔNG TÌM THẤY FILE DATA: {CHUNKS_FILE}")
+            else:
+                loader = TextLoader(str(CHUNKS_FILE), encoding='utf-8')
+                
             documents = loader.load()
             
             text_splitter = RecursiveCharacterTextSplitter(
@@ -200,33 +220,39 @@ def load_or_create_vectorstore():
             )
             docs = text_splitter.split_documents(documents)
             
-            # THÊM METADATA product_name cho mỗi chunk (Logic từ file mới)
+            # Add metadata
             for doc in docs:
                 product_name = extract_product_name(doc.page_content)
                 doc.metadata['product_name'] = product_name
 
-            print(f"   ✓ Split into {len(docs)} chunks with metadata")
-            print("💾 Creating embeddings and saving to database...")
+            print(f"   ✓ Split into {len(docs)} chunks")
+            print("💾 Creating embeddings and saving...")
             
-            # Batch processing for stability
+            # Batch processing để tránh lỗi memory trên HF Space
             batch_size = 50
             total_docs = len(docs)
+            
+            # Khởi tạo DB với batch đầu tiên
             db = Chroma.from_documents(
                 documents=docs[:batch_size],
                 embedding=embeddings,
                 persist_directory=str(PERSIST_DIRECTORY)
             )
             
+            # Add các batch còn lại
             for i in range(batch_size, total_docs, batch_size):
                 batch_end = min(i + batch_size, total_docs)
+                print(f"   Processing batch {i}/{total_docs}...", end='\r')
                 db.add_documents(docs[i:batch_end])
             
-            print(f"✅ Created Vector Store with {len(docs)} vectors\n")
+            print(f"\n✅ Hoàn tất! Đã lưu {total_docs} vectors vào DB\n")
 
         return db, embeddings
         
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\n❌ Error in Vector Store: {e}")
+        import traceback
+        traceback.print_exc()
         return None, None
 
 # =============================================================================
