@@ -487,3 +487,158 @@ def check_severity(analysis: str) -> bool:
     """Check if skin condition is severe"""
     if not analysis: return False
     return any(keyword in analysis.upper() for keyword in ['RẤT NẶNG', 'RẤT NGHIÊM TRỌNG'])
+
+# =============================================================================
+# PRODUCT SUGGESTION HELPERS
+# =============================================================================
+def get_product_suggestions_by_skin_types(db, skin_types: list, num_products: int = 3) -> list:
+    """
+    Truy vấn sản phẩm phù hợp với loại da
+    Args:
+        db: Vector store database
+        skin_types: Danh sách loại da (e.g., ["Hỗn hợp", "Dầu"])
+        num_products: Số lượng sản phẩm tối đa
+    Returns:
+        list: Danh sách tên sản phẩm
+    """
+    if not db or not skin_types:
+        print("⚠️ No database or skin types provided")
+        return []
+    
+    try:
+        print(f"🔍 Searching products for skin types: {skin_types}")
+        
+        # Tạo query từ loại da
+        skin_types_query = " ".join(skin_types)
+        query = f"sản phẩm chăm sóc da {skin_types_query}"
+        
+        # Truy vấn vector store
+        retriever = db.as_retriever(
+            search_type="mmr",
+            search_kwargs={
+                "k": num_products * 5,  # Lấy nhiều hơn để lọc
+                "fetch_k": num_products * 10,
+                "lambda_mult": 0.5
+            }
+        )
+        
+        docs = retriever.invoke(query)
+        print(f"📚 Retrieved {len(docs)} documents from vector store")
+        
+        # Nhóm theo product_name và lấy unique products
+        product_names = []
+        seen_products = set()
+        
+        for doc in docs:
+            # Lấy tên sản phẩm từ metadata hoặc extract từ content
+            product_name = doc.metadata.get('product_name')
+            
+            if not product_name:
+                # Fallback: extract từ page_content
+                content_lines = doc.page_content.split('\n')
+                for line in content_lines:
+                    if 'Tên sản phẩm:' in line or 'Product Name:' in line:
+                        product_name = line.split(':', 1)[1].strip()
+                        break
+            
+            if product_name and product_name not in seen_products:
+                # Kiểm tra nếu product phù hợp với skin types
+                content_lower = doc.page_content.lower()
+                metadata_str = str(doc.metadata).lower()
+                
+                match = any(
+                    skin_type.lower() in content_lower or 
+                    skin_type.lower() in metadata_str 
+                    for skin_type in skin_types
+                )
+                
+                if match:
+                    product_names.append(product_name)
+                    seen_products.add(product_name)
+                    print(f"✓ Found: {product_name}")
+                    
+                    if len(product_names) >= num_products:
+                        break
+        
+        # Nếu không tìm được đủ, lấy bất kỳ sản phẩm nào
+        if len(product_names) < num_products:
+            print(f"⚠️ Only found {len(product_names)} matching products, adding general products...")
+            for doc in docs:
+                product_name = doc.metadata.get('product_name')
+                if product_name and product_name not in seen_products:
+                    product_names.append(product_name)
+                    seen_products.add(product_name)
+                    if len(product_names) >= num_products:
+                        break
+        
+        print(f"✅ Returning {len(product_names)} product suggestions")
+        return product_names[:num_products]
+        
+    except Exception as e:
+        print(f"❌ Error getting product suggestions: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+def map_disease_to_skin_types(disease_class: str) -> list:
+    """
+    Map disease class sang skin types phù hợp
+    Args:
+        disease_class: Tên bệnh da (e.g., "Acne", "Eczema")
+    Returns:
+        list: Danh sách loại da phù hợp
+    """
+    print(f"🔍 Mapping disease: {disease_class}")
+    
+    # Normalize disease name
+    disease_lower = disease_class.lower().replace('_', ' ')
+    
+    # Direct mapping từ SKIN_CLASSES
+    disease_mapping = {
+        'acne': ['Hỗn hợp', 'Dầu', 'Nhạy cảm'],
+        'actinic keratosis': ['Khô', 'Thường'],
+        'eczema': ['Hỗn hợp', 'Khô', 'Thường', 'Dầu', 'Nhạy cảm'],
+        'psoriasis': ['Khô'],
+        'rosacea': ['Hỗn hợp', 'Dầu', 'Nhạy cảm'],
+        'seborrh keratoses': ['Thường', 'Dầu', 'Nhạy cảm'],
+        'sun sunlight damage': ['Hỗn hợp', 'Khô', 'Thường', 'Nhạy cảm'],
+        'tinea': ['Hỗn hợp', 'Dầu'],
+        'warts': ['Hỗn hợp', 'Khô', 'Thường', 'Dầu', 'Nhạy cảm'],
+        'normal': ['Thường']
+    }
+    
+    # Tìm trong mapping
+    for key, skin_types in disease_mapping.items():
+        if key in disease_lower or disease_lower in key:
+            print(f"✓ Mapped to skin types: {skin_types}")
+            return skin_types
+    
+    # Fallback: tìm trong SKIN_CONDITION_TO_SKIN_TYPE
+    for condition_key, skin_types in SKIN_CONDITION_TO_SKIN_TYPE.items():
+        if condition_key in disease_lower or disease_lower in condition_key:
+            print(f"✓ Mapped via SKIN_CONDITION_TO_SKIN_TYPE: {skin_types}")
+            return skin_types
+    
+    # Default fallback
+    print(f"⚠️ No specific mapping found, using default")
+    return ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"]
+
+def map_skin_condition_to_types(condition: str) -> list:
+    """
+    Map skin condition (Dry/Normal/Oily) sang loại da tiếng Việt
+    Args:
+        condition: "Dry", "Normal", hoặc "Oily"
+    Returns:
+        list: Danh sách loại da
+    """
+    print(f"🔍 Mapping condition: {condition}")
+    
+    mapping = {
+        "dry": ["Khô"],
+        "normal": ["Thường"],
+        "oily": ["Dầu"],
+    }
+    
+    result = mapping.get(condition.lower(), ["Thường"])
+    print(f"✓ Mapped to: {result}")
+    return result

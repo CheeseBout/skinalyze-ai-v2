@@ -35,7 +35,10 @@ from RAG_cosmetic import (
     analyze_skin_image,
     check_severity,
     build_image_analysis_query,
-    detect_skin_condition_and_types
+    detect_skin_condition_and_types,
+    get_product_suggestions_by_skin_types,
+    map_disease_to_skin_types,
+    map_skin_condition_to_types
 )
 
 # =============================================================================
@@ -88,6 +91,7 @@ class AppState:
     segmentation_model = None
     skin_condition_model = None
     face_detector = None
+    vectorstore = None  # Thêm để lưu vector store
 
 state = AppState()
 
@@ -288,6 +292,7 @@ async def lifespan(app: FastAPI):
         if db is None:
             print("\n⚠️  Vector Store not initialized")
         else:
+            state.vectorstore = db  # Lưu vector store
             state.rag_chain = setup_rag_chain(db)
             print("\n✅ RAG Chatbot ready")
         
@@ -544,6 +549,7 @@ async def classify_skin_disease(
     """
     Classify skin disease using EfficientNet.
     Checks for face visibility ONLY if notes == 'facial'.
+    Returns product suggestions based on detected disease.
     """
     if state.classification_model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
@@ -583,13 +589,30 @@ async def classify_skin_disease(
             return {
                 "predicted_class": "Unknown",
                 "confidence": float(confidence.item()),
-                "note": "Model prediction index out of bounds for current class list"
+                "note": "Model prediction index out of bounds for current class list",
+                "product_suggestions": []
             }
 
+        predicted_class = SKIN_CLASSES[pred_index]
+        
+        # Get product suggestions
+        product_suggestions = []
+        if state.vectorstore:
+            # Map disease to skin types
+            suitable_skin_types = map_disease_to_skin_types(predicted_class)
+            
+            # Get product suggestions
+            product_suggestions = get_product_suggestions_by_skin_types(
+                state.vectorstore, 
+                suitable_skin_types,
+                num_products=5
+            )
+
         return {
-            "predicted_class": SKIN_CLASSES[pred_index],
+            "predicted_class": predicted_class,
             "confidence": float(confidence.item()),
-            "all_predictions": {SKIN_CLASSES[i]: float(all_probs[i]) for i in range(min(len(SKIN_CLASSES), len(all_probs)))}
+            "all_predictions": {SKIN_CLASSES[i]: float(all_probs[i]) for i in range(min(len(SKIN_CLASSES), len(all_probs)))},
+            "product_suggestions": product_suggestions
         }
     except HTTPException as he:
         raise he
@@ -600,6 +623,7 @@ async def classify_skin_disease(
 async def classify_skin_condition(file: UploadFile = File(...)) -> Dict:
     """
     Classify skin condition (Dry/Normal/Oily) - Always checks for face.
+    Returns product suggestions based on detected skin condition.
     """
     if state.skin_condition_model is None:
         raise HTTPException(status_code=503, detail="Skin condition model not loaded")
@@ -631,11 +655,27 @@ async def classify_skin_condition(file: UploadFile = File(...)) -> Dict:
             confidence, predicted = torch.max(probabilities, 1)
             all_probs = probabilities[0].cpu().numpy()
         
+        predicted_condition = SKIN_CONDITION_CLASSES[predicted.item()]
+        
+        # Get product suggestions
+        product_suggestions = []
+        if state.vectorstore:
+            # Map condition to skin types
+            suitable_skin_types = map_skin_condition_to_types(predicted_condition)
+            
+            # Get product suggestions
+            product_suggestions = get_product_suggestions_by_skin_types(
+                state.vectorstore,
+                suitable_skin_types,
+                num_products=5
+            )
+        
         return {
-            "predicted_condition": SKIN_CONDITION_CLASSES[predicted.item()],
+            "predicted_condition": predicted_condition,
             "confidence": float(confidence.item()),
             "all_predictions": {SKIN_CONDITION_CLASSES[i]: float(all_probs[i]) for i in range(len(SKIN_CONDITION_CLASSES))},
-            "face_detected": True
+            "face_detected": True,
+            "product_suggestions": product_suggestions
         }
         
     except HTTPException as he:
