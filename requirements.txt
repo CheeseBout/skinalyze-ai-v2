@@ -1,34 +1,24 @@
-# Core dependencies
-langchain==0.1.16
-langchain-community==0.0.33
-langchain-google-genai==0.0.11
-langchain-chroma==0.1.0
-google-generativeai==0.4.1
-
-# Vector store
-chromadb==0.4.22
-
-# Embeddings
-sentence-transformers==2.5.1
-torch==2.2.0
-torchvision==0.17.0
-
-# Image processing
-Pillow==10.2.0
-
-# Data processing
-pandas==2.1.4
-
+fastapi
+uvicorn
+python-multipart
+python-dotenv
+# AI & LangChain Core
+langchain
+langchain-community
+langchain-google-genai
+langchain-chroma
+google-generativeai
+chromadb
+# Torch (phiên bản CPU để nhẹ image, HF Spaces free không có GPU trừ khi bạn trả phí)
+torch
+torchvision
+--extra-index-url https://download.pytorch.org/whl/cpu
+# Image Processing
+Pillow
+numpy
+opencv-python-headless
+mediapipe
+# SAM2 (Cài trực tiếp từ git)
+git+https://github.com/facebookresearch/segment-anything-2.git
 # Utilities
-python-dotenv==1.0.0
-
-# FastAPI dependencies
-fastapi==0.109.0
-uvicorn==0.27.0
-python-multipart==0.0.6
-
-# Mediapipe
-mediapipe>=0.10.0
-
-# Segment Anything Model 2
-# pip install git+https://github.com/facebookresearch/segment-anything-2.git
+pandas
