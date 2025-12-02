@@ -37,45 +37,37 @@ from RAG_cosmetic import (
     build_image_analysis_query,
     detect_skin_condition_and_types,
     get_product_suggestions_by_skin_types,
-    map_disease_to_skin_types,
-    map_skin_condition_to_types
+    map_disease_to_skin_types
 )
 
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-# UPDATED: Exactly 10 classes (Removed Drug_Eruption)
+# ✅ UPDATED: 11 classes (khớp với training notebook)
 SKIN_CLASSES = [
-    'Acne', 
-    'Actinic_Keratosis', 
-    'Eczema', 
-    'Normal', 
-    'Psoriasis', 
-    'Rosacea', 
-    'Seborrh_Keratoses', 
-    'Sun_Sunlight_Damage', 
-    'Tinea', 
+    'Acne',
+    'Actinic_Keratosis',
+    'Drug_Eruption',  # ← ✅ THÊM LẠI
+    'Eczema',
+    'Normal',
+    'Psoriasis',
+    'Rosacea',
+    'Seborrh_Keratoses',
+    'Sun_Sunlight_Damage',
+    'Tinea',
     'Warts'
 ]
-
-SKIN_CONDITION_CLASSES = ['Dry', 'Normal', 'Oily']
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 MODEL_PATHS = {
     'classification': os.path.join(BASE_DIR, "models/efficientnet_b0_complete.pt"),
-    'segmentation': os.path.join(BASE_DIR, "models/medsam2_dermatology_best_aug2.pth"),
-    'skin_condition': os.path.join(BASE_DIR, "models/efficient-net-skin-conditions-classifier.pth")
+    'segmentation': os.path.join(BASE_DIR, "models/medsam2_dermatology_best_aug2.pth")
 }
 
 IMAGE_TRANSFORMS = {
     'classification': transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ]),
-    'condition': transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -89,9 +81,8 @@ class AppState:
     rag_chain = None
     classification_model = None
     segmentation_model = None
-    skin_condition_model = None
     face_detector = None
-    vectorstore = None  # Thêm để lưu vector store
+    vectorstore = None
 
 state = AppState()
 
@@ -100,9 +91,8 @@ state = AppState()
 # =============================================================================
 def load_classification_model():
     """
-    Robust loader for EfficientNet-B0 classification model.
-    Matches the custom architecture:
-    Dropout -> Linear(512) -> BN -> ReLU -> Dropout -> Linear(256) -> BN -> ReLU -> Linear(10)
+    ✅ FIXED: Load EfficientNet-B0 với architecture khớp training notebook
+    Architecture: 1280 → [Dropout 0.4] → 512 → [BN + ReLU + Dropout 0.3] → 256 → [BN + ReLU] → 11
     """
     model_path = MODEL_PATHS['classification']
     if not os.path.exists(model_path):
@@ -110,9 +100,10 @@ def load_classification_model():
         return None
     
     try:
+        # Load checkpoint
         checkpoint = torch.load(model_path, map_location=device, weights_only=False)
         
-        # 1. If checkpoint is a full model object
+        # 1. If checkpoint is a full model object (unlikely)
         if not isinstance(checkpoint, dict):
             print("ℹ️  Checkpoint is a full model object.")
             model = checkpoint
@@ -120,93 +111,52 @@ def load_classification_model():
             model.eval()
             return model
 
-        # 2. If checkpoint is a state dict
-        state_dict = checkpoint.get('model_state_dict') or checkpoint.get('state_dict') or checkpoint
+        # 2. Extract state_dict
+        state_dict = checkpoint.get('model_state_dict', checkpoint)
         
-        # Initialize Base Model
+        # ✅ Get architecture config from checkpoint
+        config = checkpoint.get('config', {})
+        dropout1 = config.get('dropout1', 0.4)  # Default from notebook
+        dropout2 = config.get('dropout2', 0.3)  # Default from notebook
+        num_classes = checkpoint.get('num_classes', len(SKIN_CLASSES))
+        
+        print(f"ℹ️  Loading model with config:")
+        print(f"   - Num classes: {num_classes}")
+        print(f"   - Dropout 1: {dropout1}")
+        print(f"   - Dropout 2: {dropout2}")
+        
+        # Initialize EfficientNet-B0 base
         model = models.efficientnet_b0(weights=None)
         
-        # Reconstruct Custom Classifier Head
-        # Based on your logic: 1280 -> 512 -> 256 -> 10
-        # Note: Dropout p values (0.3, 0.5 etc) don't affect weight loading, only training.
+        # ✅ Reconstruct EXACT classifier from training notebook
+        num_features = 1280  # EfficientNet-B0 default
         
-        try:
-            # Attempt to dynamically size based on saved weights if possible
-            # Usually: classifier.1.weight (512, 1280)
-            #          classifier.5.weight (256, 512)
-            #          classifier.8.weight (10, 256)
-            
-            linear1_in = 1280 # EfficientNet-B0 default
-            linear1_out = 512
-            linear2_out = 256
-            num_classes = len(SKIN_CLASSES) # Should be 10
-
-            if 'classifier.1.weight' in state_dict:
-                linear1_out = state_dict['classifier.1.weight'].shape[0]
-            if 'classifier.5.weight' in state_dict:
-                linear2_out = state_dict['classifier.5.weight'].shape[0]
-            if 'classifier.8.weight' in state_dict:
-                num_classes = state_dict['classifier.8.weight'].shape[0]
-
-            print(f"ℹ️  Reconstructing Classifier: {linear1_in} -> {linear1_out} -> {linear2_out} -> {num_classes}")
-
-            model.classifier = nn.Sequential(
-                nn.Dropout(p=0.3),                # 0
-                nn.Linear(linear1_in, linear1_out), # 1
-                nn.BatchNorm1d(linear1_out),      # 2
-                nn.ReLU(),                        # 3
-                nn.Dropout(p=0.5),                # 4
-                nn.Linear(linear1_out, linear2_out),# 5
-                nn.BatchNorm1d(linear2_out),      # 6
-                nn.ReLU(),                        # 7
-                nn.Linear(linear2_out, num_classes) # 8
-            )
-            
-            # Load weights
-            model.load_state_dict(state_dict, strict=False)
-            model.to(device)
-            model.eval()
-            print(f"✅ Classification model loaded successfully")
-            return model
-
-        except Exception as e:
-            print(f"⚠️ Error reconstructing head: {e}")
-            return None
+        model.classifier = nn.Sequential(
+            nn.Dropout(p=dropout1),              # Layer 0: Dropout 0.4
+            nn.Linear(num_features, 512),         # Layer 1: 1280 → 512
+            nn.BatchNorm1d(512),                  # Layer 2: BatchNorm
+            nn.ReLU(),                            # Layer 3: ReLU
+            nn.Dropout(p=dropout2),              # Layer 4: Dropout 0.3
+            nn.Linear(512, 256),                  # Layer 5: 512 → 256
+            nn.BatchNorm1d(256),                  # Layer 6: BatchNorm
+            nn.ReLU(),                            # Layer 7: ReLU
+            nn.Linear(256, num_classes)          # Layer 8: 256 → 11
+        )
+        
+        # Load trained weights
+        model.load_state_dict(state_dict, strict=False)
+        model.to(device)
+        model.eval()
+        
+        print(f"✅ Classification model loaded successfully")
+        print(f"   Architecture: 1280 → 512 → 256 → {num_classes}")
+        
+        return model
         
     except Exception as e:
         print(f"❌ Error loading classification model: {e}")
-        return None
-
-def load_skin_condition_model():
-    """Load EfficientNet skin condition model"""
-    model_path = MODEL_PATHS['skin_condition']
-    if not os.path.exists(model_path):
-        print(f"⚠️  Skin condition model not found")
-        return None
-    
-    try:
-        checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-        state_dict = checkpoint.get('model_state_dict') or checkpoint.get('state_dict') or checkpoint
-        
-        for variant_name, variant_fn in [
-            ('EfficientNet-B0', models.efficientnet_b0),
-            ('EfficientNet-B1', models.efficientnet_b1),
-            ('EfficientNet-B2', models.efficientnet_b2),
-        ]:
-            try:
-                model = variant_fn(weights=None)
-                num_features = model.classifier[1].in_features
-                model.classifier[1] = nn.Linear(num_features, len(SKIN_CONDITION_CLASSES))
-                model.load_state_dict(state_dict, strict=False)
-                model.to(device)
-                model.eval()
-                print(f"✅ Skin condition model loaded ({variant_name})")
-                return model
-            except:
-                continue
-        return None
-    except Exception as e:
-        print(f"❌ Error loading skin condition model: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def load_segmentation_model():
@@ -223,11 +173,7 @@ def load_segmentation_model():
         # Load checkpoint
         checkpoint = torch.load(model_path, map_location=device, weights_only=False)
         
-        # --- FIX: Dùng đường dẫn tương đối (Relative Path) ---
-        # Hydra sẽ tự tìm file này trong folder cài đặt của thư viện sam2
-        # (File này đã được Dockerfile tải về đúng chỗ)
         config_file = "configs/sam2.1/sam2.1_hiera_t.yaml"
-
         print(f"ℹ️ Loading SAM2 with config: {config_file}")
 
         sam2_model = build_sam2(
@@ -272,7 +218,6 @@ async def lifespan(app: FastAPI):
     
     state.classification_model = load_classification_model()
     state.segmentation_model = load_segmentation_model()
-    state.skin_condition_model = load_skin_condition_model()
     state.face_detector = load_face_detection_model()
 
     try:
@@ -282,7 +227,7 @@ async def lifespan(app: FastAPI):
         if db is None:
             print("\n⚠️  Vector Store not initialized")
         else:
-            state.vectorstore = db  # Lưu vector store
+            state.vectorstore = db
             state.rag_chain = setup_rag_chain(db)
             print("\n✅ RAG Chatbot ready")
         
@@ -303,7 +248,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AI Dermatology & Cosmetic Consultant API",
     description="Stateless API for skin disease classification, segmentation, and cosmetic consultation",
-    version="3.4.0",
+    version="3.6.0",
     lifespan=lifespan
 )
 
@@ -344,7 +289,6 @@ class HealthResponse(BaseModel):
     vectorstore_status: str
     classification_model_status: str
     segmentation_model_status: str
-    skin_condition_model_status: str
     timestamp: str
 
 class VLMAnalysisResponse(BaseModel):
@@ -364,12 +308,11 @@ async def health_check():
         vectorstore_status="ready" if state.rag_chain else "not_initialized",
         classification_model_status="loaded" if state.classification_model else "not_loaded",
         segmentation_model_status="loaded" if state.segmentation_model else "not_loaded",
-        skin_condition_model_status="loaded" if state.skin_condition_model else "not_loaded",
         timestamp=datetime.now().isoformat()
     )
 
 # =============================================================================
-# RAG CHATBOT ENDPOINTS (UPDATED FOR MULTIMODAL + SMART PRODUCT SEARCH)
+# RAG CHATBOT ENDPOINTS
 # =============================================================================
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(
@@ -607,71 +550,6 @@ async def classify_skin_disease(
     except HTTPException as he:
         raise he
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/classification-condition")
-async def classify_skin_condition(file: UploadFile = File(...)) -> Dict:
-    """
-    Classify skin condition (Dry/Normal/Oily) - Always checks for face.
-    Returns product suggestions based on detected skin condition.
-    """
-    if state.skin_condition_model is None:
-        raise HTTPException(status_code=503, detail="Skin condition model not loaded")
-    
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Invalid file type")
-    
-    try:
-        contents = await file.read()
-        image = Image.open(io.BytesIO(contents)).convert("RGB")
-        
-        if state.face_detector:
-            image_np = np.array(image)
-            face_results = state.face_detector.process(image_np)
-            
-            if not face_results.detections:
-                 raise HTTPException(
-                     status_code=400, 
-                     detail="No face detected. Please upload a clear image of a face for skin condition analysis."
-                 )
-        else:
-            print("⚠️ Face detector skipped (not loaded)")
-
-        input_tensor = IMAGE_TRANSFORMS['condition'](image).unsqueeze(0).to(device)
-        
-        with torch.no_grad():
-            outputs = state.skin_condition_model(input_tensor)
-            probabilities = torch.nn.functional.softmax(outputs, dim=1)
-            confidence, predicted = torch.max(probabilities, 1)
-            all_probs = probabilities[0].cpu().numpy()
-        
-        predicted_condition = SKIN_CONDITION_CLASSES[predicted.item()]
-        
-        # Get product suggestions
-        product_suggestions = []
-        if state.vectorstore:
-            # Map condition to skin types
-            suitable_skin_types = map_skin_condition_to_types(predicted_condition)
-            
-            # Get product suggestions
-            product_suggestions = get_product_suggestions_by_skin_types(
-                state.vectorstore,
-                suitable_skin_types,
-                num_products=5
-            )
-        
-        return {
-            "predicted_condition": predicted_condition,
-            "confidence": float(confidence.item()),
-            "all_predictions": {SKIN_CONDITION_CLASSES[i]: float(all_probs[i]) for i in range(len(SKIN_CONDITION_CLASSES))},
-            "face_detected": True,
-            "product_suggestions": product_suggestions
-        }
-        
-    except HTTPException as he:
-        raise he 
-    except Exception as e:
-        print(f"Error processing: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/segmentation-disease")
