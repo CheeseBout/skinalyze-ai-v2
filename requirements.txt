@@ -3,15 +3,19 @@ uvicorn
 python-multipart
 python-dotenv
 
-# --- AI Core (Cố định version để tránh xung đột) ---
+# --- AI Core ---
 langchain==0.1.16
 langchain-community==0.0.33
 langchain-google-genai==0.0.11
 langchain-chroma==0.1.0
-# QUAN TRỌNG: Chặn version 0.3.0 gây lỗi
 langchain-core<0.2.0
 google-generativeai==0.4.1
 chromadb==0.4.22
+
+# --- Vector Store Dependencies (FIX LỖI 1) ---
+sentence-transformers>=2.2.2
+scikit-learn
+huggingface-hub
 
 # --- Torch CPU ---
 torch
