@@ -2,23 +2,29 @@ fastapi
 uvicorn
 python-multipart
 python-dotenv
-# AI & LangChain Core
-langchain
-langchain-community
-langchain-google-genai
-langchain-chroma
-google-generativeai
-chromadb
-# Torch (phiên bản CPU để nhẹ image, HF Spaces free không có GPU trừ khi bạn trả phí)
+
+# --- AI Core (Cố định version để tránh xung đột) ---
+langchain==0.1.16
+langchain-community==0.0.33
+langchain-google-genai==0.0.11
+langchain-chroma==0.1.0
+# QUAN TRỌNG: Chặn version 0.3.0 gây lỗi
+langchain-core<0.2.0
+google-generativeai==0.4.1
+chromadb==0.4.22
+
+# --- Torch CPU ---
 torch
 torchvision
 --extra-index-url https://download.pytorch.org/whl/cpu
-# Image Processing
+
+# --- Image Processing ---
 Pillow
 numpy
 opencv-python-headless
 mediapipe
-# SAM2 (Cài trực tiếp từ git)
+# SAM2
 git+https://github.com/facebookresearch/segment-anything-2.git
-# Utilities
+
+# --- Utilities ---
 pandas
