@@ -6,6 +6,7 @@ Merged Features:
 - Currency Conversion (USD -> VND)
 - Smart Product Grouping & Filtering (Improved)
 - VLM Skin Analysis (Base64/Bytes support)
+- Improved chunk_size and format_docs logic
 """
 
 import os
@@ -42,20 +43,26 @@ USD_TO_VND = 26349
 _CACHED_EMBEDDINGS = None
 
 # =============================================================================
-# DATA MAPPING - EXTENDED
+# DATA MAPPING - EXTENDED (ƯU TIÊN TỪ KHÓA DÀI TRƯỚC)
 # =============================================================================
 SKIN_CONDITION_TO_SKIN_TYPE = {
-    "acne": ["Hỗn hợp", "Dầu", "Nhạy cảm"],
-    "mụn": ["Hỗn hợp", "Dầu", "Nhạy cảm"],
+    # ⚠️ ƯU TIÊN: Từ khóa DÀI/CỤ THỂ trước, NGẮN/CHUNG sau
+    "warts": ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"],
+    "mụn cóc": ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"],
+    "cóc": ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"],
+    
     "mụn trứng cá": ["Hỗn hợp", "Dầu", "Nhạy cảm"],
     
+    "acne": ["Hỗn hợp", "Dầu", "Nhạy cảm"],
+    "mụn": ["Hỗn hợp", "Dầu", "Nhạy cảm"],
+    
     "actinic keratosis": ["Khô", "Thường"],
-    "dày sừng": ["Khô", "Thường"],
     "da dày sừng": ["Khô", "Thường"],
+    "dày sừng": ["Khô", "Thường"],
     
     "drug eruption": ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"],
-    "phát ban thuốc": ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"],
     "phát ban do thuốc": ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"],
+    "phát ban thuốc": ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"],
     
     "eczema": ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"],
     "chàm": ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"],
@@ -72,16 +79,12 @@ SKIN_CONDITION_TO_SKIN_TYPE = {
     "viêm da tiết bã": ["Thường", "Dầu", "Nhạy cảm"],
     
     "sun damage": ["Hỗn hợp", "Khô", "Thường", "Nhạy cảm"],
-    "tổn thương nắng": ["Hỗn hợp", "Khô", "Thường", "Nhạy cảm"],
     "hư tổn do nắng": ["Hỗn hợp", "Khô", "Thường", "Nhạy cảm"],
+    "tổn thương nắng": ["Hỗn hợp", "Khô", "Thường", "Nhạy cảm"],
     
     "tinea": ["Hỗn hợp", "Dầu"],
     "nấm da": ["Hỗn hợp", "Dầu"],
     "nấm": ["Hỗn hợp", "Dầu"],
-    
-    "warts": ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"],
-    "mụn cóc": ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"],
-    "cóc": ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"],
 }
 
 # =============================================================================
@@ -117,6 +120,18 @@ def extract_product_name(chunk_text):
                 return potential_name
     return "Unknown Product"
 
+def extract_field_from_chunk(chunk_text, field_name):
+    """Trích xuất giá trị của field từ chunk text"""
+    pattern = rf'{field_name}:\s*(.+?)(?:\n|$)'
+    match = re.search(pattern, chunk_text, re.IGNORECASE)
+    
+    if match:
+        value = match.group(1).strip()
+        value = value.replace('---', '').strip()
+        if value and value != 'N/A':
+            return value
+    return None
+
 def convert_price_in_text(text):
     """Tìm và chuyển đổi giá USD sang VND trong text"""
     def replace_price(match):
@@ -132,11 +147,23 @@ def convert_price_in_text(text):
     return result
 
 def detect_skin_condition_and_types(query):
-    """Phát hiện bệnh da trong câu hỏi và trả về loại da phù hợp"""
+    """
+    Phát hiện bệnh da trong câu hỏi và trả về loại da phù hợp
+    ⚠️ ƯU TIÊN: Kiểm tra từ khóa DÀI trước (mụn cóc) rồi mới đến NGẮN (mụn)
+    """
     query_lower = query.lower()
-    for condition, skin_types in SKIN_CONDITION_TO_SKIN_TYPE.items():
+    
+    # Sắp xếp theo độ dài từ khóa (dài -> ngắn)
+    sorted_conditions = sorted(
+        SKIN_CONDITION_TO_SKIN_TYPE.items(),
+        key=lambda x: len(x[0]),
+        reverse=True
+    )
+    
+    for condition, skin_types in sorted_conditions:
         if condition in query_lower:
             return condition, skin_types
+    
     return None, None
 
 # =============================================================================
@@ -157,9 +184,12 @@ def load_or_create_vectorstore():
             embeddings = _CACHED_EMBEDDINGS
         else:
             print(f"\n⏳ Đang tải embedding model: {MODEL_NAME}...")
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            print(f"   🖥️ Sử dụng thiết bị: {device}")
+            
             embeddings = HuggingFaceEmbeddings(
                 model_name=MODEL_NAME,
-                model_kwargs={'device': 'cpu'},
+                model_kwargs={'device': device},
                 encode_kwargs={'normalize_embeddings': True}
             )
             _CACHED_EMBEDDINGS = embeddings
@@ -196,10 +226,11 @@ def load_or_create_vectorstore():
             loader = TextLoader(str(CHUNKS_FILE), encoding='utf-8')
             documents = loader.load()
             
+            # ✅ IMPROVED: Tăng chunk_size và overlap để giữ thông tin đầy đủ
             text_splitter = RecursiveCharacterTextSplitter(
                 separators=["---"],
-                chunk_size=400,
-                chunk_overlap=50,
+                chunk_size=800,  # Tăng từ 400 lên 800
+                chunk_overlap=100,  # Tăng từ 50 lên 100
                 length_function=len
             )
             docs = text_splitter.split_documents(documents)
@@ -216,6 +247,10 @@ def load_or_create_vectorstore():
             batch_size = 50
             total_docs = len(docs)
             
+            if total_docs == 0:
+                print("   ⚠️ Không có chunk nào để thêm vào database.")
+                return None, embeddings
+            
             db = Chroma.from_documents(
                 documents=docs[:batch_size],
                 embedding=embeddings,
@@ -226,6 +261,9 @@ def load_or_create_vectorstore():
                 batch_end = min(i + batch_size, total_docs)
                 print(f"   Processing batch {i}/{total_docs}...", end='\r')
                 db.add_documents(docs[i:batch_end])
+                
+                if device == 'cuda':
+                    torch.cuda.empty_cache()
             
             print(f"\n✅ Hoàn tất! Đã lưu {total_docs} vectors vào DB\n")
 
@@ -241,7 +279,7 @@ def load_or_create_vectorstore():
 # RAG CHAIN SETUP - IMPROVED
 # =============================================================================
 def setup_rag_chain(db):
-    """Setup RAG chain with improved product grouping and grounding"""
+    """Setup RAG chain with improved product grouping and metadata extraction"""
     print("\n" + "=" * 80)
     print("⛓️ KHỞI TẠO RAG CHAIN")
     print("=" * 80)
@@ -250,25 +288,23 @@ def setup_rag_chain(db):
     print("\n🤖 [1/3] Connecting to Google Gemini...")
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.0-flash",
-        temperature=0.1,
-        max_output_tokens=1200,
+        temperature=0.05,  # Giảm xuống 0.05 để ổn định hơn
+        max_output_tokens=1500,  # Tăng lên 1500
         convert_system_message_to_human=True,
-        request_options={"timeout": 60},
-        max_retries=2
+        request_options={"timeout": 90},
+        max_retries=3
     )
     print("   ✓ Connected to Gemini 2.0 Flash")
     
     # Retriever
     print("🔍 [2/3] Creating Retriever...")
     retriever = db.as_retriever(
-        search_type="mmr",
+        search_type="similarity",  # Đổi sang similarity
         search_kwargs={
-            "k": 12,  # Tăng lên để lấy đủ chunks chứa Price & Suitable for
-            "fetch_k": 24,
-            "lambda_mult": 0.7
+            "k": 30  # Tăng lên 30 để lấy đủ chunks
         }
     )
-    print("   ✓ Retriever ready (MMR, Smart Grouping)")
+    print("   ✓ Retriever ready (Similarity Search, k=30)")
     
     # Prompt Template
     print("📝 [3/3] Creating Prompt Template...")
@@ -282,12 +318,17 @@ Câu hỏi: "xin chào", "hi", "hello"
 
 🔹 **HỎI VỀ BỆNH DA (ƯU TIÊN CAO)**
 Câu hỏi: "tôi bị mụn", "chàm", "vảy nến", "nấm da"...
-→ **BƯỚC 1:** Xác định BỆNH DA và LOẠI DA PHÙ HỢP (đã có trong context).
-→ **BƯỚC 2:** GỢI Ý 2 SẢN PHẨM phù hợp nhất từ database.
+→ ĐI THẲNG VÀO: "Dạ, mình gợi ý sản phẩm cho [bệnh da] nhé:
+   [LIỆT KÊ 2-3 SẢN PHẨM NGAY]"
+   
+⚠️ QUAN TRỌNG: 
+• CHỈ trả lời về bệnh da được NÊU TRONG CÂU HỎI HIỆN TẠI
+• KHÔNG được nhắc lại hoặc nhầm lẫn với câu hỏi trước
+• KHÔNG cần giải thích dài dòng
 
 🔹 **HỎI VỀ VẤN ĐỀ DA/LOẠI SẢN PHẨM**
 Câu hỏi: "da khô", "da dầu", "kem dưỡng", "serum"...
-→ Gợi ý 2 sản phẩm PHÙ HỢP từ database, nêu rõ CÔNG DỤNG và LOẠI DA phù hợp.
+→ Gợi ý 2-3 sản phẩm PHÙ HỢP từ database.
 
 🔹 **HỎI GIÁ/MUA Ở ĐÂU**
 → "Xin lỗi, mình chỉ tư vấn về sản phẩm. Bạn có thể mua tại store chính hãng. Mình tư vấn thêm sản phẩm khác nhé? 😊"
@@ -295,88 +336,150 @@ Câu hỏi: "da khô", "da dầu", "kem dưỡng", "serum"...
 ---
 
 **CHÚ Ý KHI TRẢ LỜI:**
-- Luôn THÂN THIỆN, dùng "mình/bạn".
-- **GROUNDING:** CHỈ GỢI Ý sản phẩm CÓ TRONG DATABASE bên dưới.
-- **SỐ LƯỢNG:** Mặc định 2 sản phẩm (trừ khi user hỏi cụ thể số lượng).
-- **BẮT BUỘC FORMAT:**
-  **Số. Tên sản phẩm (Brand)** 
-  Giá: XXX.XXX VND | Loại da: [loại da phù hợp]
-  Công dụng: [tóm tắt ngắn từ ingredients hoặc category]
-- **KHÔNG HIỂN THỊ USD**, chỉ hiển thị VND.
-- **LUÔN LUÔN** hiển thị giá và loại da nếu có trong database.
-- Dùng emoji phù hợp: 😊💄✨💕💊
+- **NGẮN GỌN - ĐI THẲNG VÀO SẢN PHẨM**
+- **⚠️ TẬP TRUNG VÀO CÂU HỎI HIỆN TẠI** - không nhắc lại câu hỏi cũ
+- **GROUNDING:** CHỈ GỢI Ý sản phẩm CÓ TRONG DATABASE
+- **SỐ LƯỢNG:** Mặc định 2-3 sản phẩm (tối đa 3)
+- **⚠️ FORMAT MỖI SẢN PHẨM (BẮT BUỘC ĐIỀN ĐẦY ĐỦ):**
+  **Số. Tên sản phẩm của THƯƠNG HIỆU** 
+  Giá: XXX.XXX VND | Đánh giá: X/5 | Loại da: [...]
+  
+  ⚠️ QUAN TRỌNG: 
+  • BẮT BUỘC phải có ĐẦY ĐỦ: Tên, Thương hiệu, Giá, Đánh giá, Loại da
+  • KHÔNG hiển thị công dụng hoặc thành phần
+  • NẾU thiếu thông tin → ghi "(Không có thông tin)"
+  • TẤT CẢ sản phẩm phải có FORMAT GIỐNG NHAU
+- **LOẠI DA PHẢI DỊCH SANG TIẾNG VIỆT:**
+  Combination → Hỗn hợp | Dry → Khô | Normal → Thường | Oily → Dầu | Sensitive → Nhạy cảm
+- **CHỈ HIỂN THỊ VND**, KHÔNG USD
+- Dùng emoji phù hợp: 😊💄✨💕
 
-THÔNG TIN SẢN PHẨM TỪ DATABASE:
+THÔNG TIN SẢN PHẨM:
 {context}
 
-LỊCH SỬ/CONTEXT CÂU HỎI:
-{question}
+CÂU HỎI: {question}
 
-TRẢ LỜI:"""
+TRẢ LỜI (2-3 sản phẩm):"""
     
     prompt = ChatPromptTemplate.from_template(template)
     
-    # ✅ IMPROVED: Ưu tiên chunks có Price và Suitable for
+    # ✅ IMPROVED: format_docs với metadata extraction và structured format
     def format_docs(docs):
         """
-        Format documents: NHÓM chunks theo product_name, 
-        ƯU TIÊN chunks có Price và Suitable for,
-        chỉ lấy 2-3 sản phẩm đầu tiên
+        Format documents: NHÓM chunks theo product_name,
+        trích xuất metadata, sắp xếp theo relevance,
+        chọn top 3 sản phẩm với thông tin đầy đủ
         """
         if not docs or len(docs) == 0:
             return "KHÔNG TÌM THẤY SẢN PHẨM TRONG DATABASE"
         
-        # Nhóm các chunks theo product_name
+        print(f"   🔍 Tìm được {len(docs)} chunks từ database")
+        
+        # Nhóm chunks theo product_name
         product_groups = {}
-        for doc in docs:
+        
+        for idx, doc in enumerate(docs):
             product_name = doc.metadata.get('product_name', 'Unknown Product')
+            
             if product_name not in product_groups:
+                # Trích xuất metadata
+                metadata = {
+                    'brand': extract_field_from_chunk(doc.page_content, 'Brand'),
+                    'category': extract_field_from_chunk(doc.page_content, 'Category'),
+                    'suitable_for': extract_field_from_chunk(doc.page_content, 'Suitable for'),
+                    'rank': extract_field_from_chunk(doc.page_content, 'Rank'),
+                    'price': extract_field_from_chunk(doc.page_content, 'Price')
+                }
+                
                 product_groups[product_name] = {
-                    'summary_chunks': [],  # Chứa Price, Suitable for
-                    'other_chunks': []     # Các chunk khác
+                    'chunks': [],
+                    'first_index': idx,
+                    'metadata': metadata,
+                    'has_summary': False
                 }
             
-            content = doc.page_content.strip()
-            # Phân loại chunk dựa vào nội dung
-            if any(keyword in content for keyword in ['Price:', 'Suitable for:', 'Rank:', 'Category:']):
-                product_groups[product_name]['summary_chunks'].append(content)
-            else:
-                product_groups[product_name]['other_chunks'].append(content)
+            # Đánh dấu loại chunk
+            if 'chunk type: product summary' in doc.page_content.lower():
+                product_groups[product_name]['has_summary'] = True
+            
+            product_groups[product_name]['chunks'].append(doc)
         
         if not product_groups:
             return "KHÔNG TÌM THẤY SẢN PHẨM TRONG DATABASE"
         
-        # Chỉ lấy 2-3 sản phẩm đầu tiên (ưu tiên sản phẩm có summary chunk)
-        products_with_summary = [p for p in product_groups.keys() if product_groups[p]['summary_chunks']]
-        products_without_summary = [p for p in product_groups.keys() if not product_groups[p]['summary_chunks']]
+        print(f"   📦 Tìm được {len(product_groups)} sản phẩm khác nhau")
         
-        selected_products = (products_with_summary + products_without_summary)[:3]
+        # Lọc sản phẩm có summary
+        complete_products = [(name, data) for name, data in product_groups.items() if data['has_summary']]
         
+        if not complete_products:
+            complete_products = list(product_groups.items())
+        
+        # Sắp xếp theo relevance
+        sorted_products = sorted(complete_products, key=lambda x: x[1]['first_index'])
+        
+        # Chọn top 3
+        num_products = min(3, len(sorted_products))
+        selected_products = sorted_products[:num_products]
+        
+        print(f"   ✅ Chọn {num_products} sản phẩm để tư vấn")
+        
+        # Format
         formatted = []
-        for i, product_name in enumerate(selected_products, 1):
-            chunks_data = product_groups[product_name]
+        for i, (product_name, data) in enumerate(selected_products, 1):
+            chunks = data['chunks']
+            metadata = data['metadata']
             
-            product_info = f"=== SẢN PHẨM {i}: {product_name} ===\n"
+            # Loại bỏ duplicate
+            seen_contents = set()
+            unique_chunks = []
+            for chunk in chunks:
+                content_hash = hash(chunk.page_content.strip())
+                if content_hash not in seen_contents:
+                    seen_contents.add(content_hash)
+                    unique_chunks.append(chunk)
             
-            # ✅ ƯU TIÊN: Hiển thị summary chunks trước (có Price, Suitable for)
-            for chunk in chunks_data['summary_chunks']:
-                content = convert_price_in_text(chunk)
-                product_info += content + "\n"
+            # Sắp xếp: Summary trước
+            def chunk_priority(chunk):
+                content = chunk.page_content.lower()
+                if 'chunk type: product summary' in content:
+                    return 0
+                elif 'chunk type: ingredients' in content:
+                    return 1
+                else:
+                    return 2
             
-            # Sau đó mới đến các chunks khác (ingredients, etc.)
-            # Giới hạn số lượng để không quá dài
-            for chunk in chunks_data['other_chunks'][:2]:  # Chỉ lấy 2 chunk ingredients
-                content = convert_price_in_text(chunk)
-                # Rút gọn ingredients nếu quá dài
-                if 'Ingredients:' in content and len(content) > 500:
-                    content = content[:500] + "..."
-                product_info += content + "\n"
+            sorted_chunks = sorted(unique_chunks, key=chunk_priority)
+            
+            # Gộp thông tin
+            product_info = f"{'='*80}\n"
+            product_info += f"SẢN PHẨM #{i}: {product_name}\n"
+            product_info += f"{'='*80}\n"
+            
+            # Metadata tổng hợp
+            if metadata['brand']:
+                product_info += f"🏢 Thương hiệu: {metadata['brand']}\n"
+            if metadata['category']:
+                product_info += f"📁 Loại: {metadata['category']}\n"
+            if metadata['suitable_for']:
+                product_info += f"👤 Phù hợp: {metadata['suitable_for']}\n"
+            if metadata['rank']:
+                product_info += f"⭐ Đánh giá: {metadata['rank']}\n"
+            if metadata['price']:
+                price_vnd = convert_price_in_text(f"Price: {metadata['price']}")
+                product_info += f"💰 {price_vnd}\n"
+            
+            product_info += f"{'-'*80}\n\n"
+            
+            # Thêm nội dung chi tiết
+            for chunk in sorted_chunks:
+                content = chunk.page_content.strip()
+                content = convert_price_in_text(content)
+                product_info += content + "\n\n"
             
             formatted.append(product_info)
         
-        result = "\n\n".join(formatted)
-        print(f"📄 Formatted {len(selected_products)} products for LLM")
-        return result
+        return "\n\n".join(formatted)
     
     rag_chain = (
         {
@@ -389,6 +492,16 @@ TRẢ LỜI:"""
     )
     
     print("\n✅ RAG Chain ready!\n")
+    print("📊 Luồng hoạt động (CẢI TIẾN):")
+    print("   1️⃣  User Question → Retriever")
+    print("   2️⃣  Retriever → 30 chunks (similarity search)")
+    print("   3️⃣  Trích xuất metadata từ chunks")
+    print("   4️⃣  NHÓM theo product_name + Filter sản phẩm có summary")
+    print("   5️⃣  Sắp xếp theo relevance → Chọn top 3 sản phẩm")
+    print("   6️⃣  Loại bỏ duplicate + Sắp xếp: Summary → Ingredients")
+    print("   7️⃣  Format structured với metadata rõ ràng")
+    print("   8️⃣  Context + Question → LLM → 3 sản phẩm CHÍNH XÁC & ĐẦY ĐỦ ⚡\n")
+    
     return rag_chain
 
 # =============================================================================
@@ -423,7 +536,7 @@ def analyze_skin_image(image_input, note: str = None):
         if img is None:
             raise ValueError("Invalid image input")
 
-        vision_model = genai.GenerativeModel('gemini-2.0-flash') 
+        vision_model = genai.GenerativeModel('gemini-2.0-flash')
         
         vision_prompt = """Bạn là chuyên gia da liễu. Phân tích ảnh da và TÓM TẮT NGẮN GỌN:
 
@@ -462,36 +575,41 @@ Trả lời NGẮN GỌN, bằng tiếng Việt."""
 def analyze_with_context(question: str, conversation_history: list = None) -> str:
     """
     Analyze question with conversation context + Skin Condition Logic
+    ⚠️ NẾU PHÁT HIỆN BỆNH DA → BỎ QUA CONTEXT để tránh nhầm lẫn
     """
     # Detect skin condition
     detected_condition, suitable_skin_types = detect_skin_condition_and_types(question)
     
-    enhanced_part = ""
     if detected_condition:
-        skin_types_str = ", ".join(suitable_skin_types)
-        enhanced_part = f"""
-THÔNG TIN BỔ SUNG TỪ HỆ THỐNG:
-- Phát hiện bệnh da: {detected_condition}
-- Loại da phù hợp: {skin_types_str}
-- Vui lòng tìm sản phẩm cho các loại da: {skin_types_str}"""
-
-    # Build context
+        # CÓ BỆNH DA → Không dùng context, chỉ mapping sang tiếng Anh
+        skin_types_mapping = {
+            "Khô": "Dry",
+            "Thường": "Normal",
+            "Dầu": "Oily",
+            "Nhạy cảm": "Sensitive",
+            "Hỗn hợp": "Combination"
+        }
+        
+        english_skin_types = [skin_types_mapping.get(st, st) for st in suitable_skin_types]
+        skin_query = " ".join(english_skin_types)
+        enhanced_query = f"{detected_condition} {skin_query} skin treatment moisturizer serum toner cream"
+        
+        return enhanced_query
+    
+    # KHÔNG CÓ BỆNH DA → Dùng context bình thường
     context_str = ""
     if conversation_history:
         recent_context = conversation_history[-3:]
         context_str = "LỊCH SỬ HỘI THOẠI GẦN ĐÂY:\n" + "\n".join([
-            f"User: {ctx[0]}\nBot: {ctx[1][:200]}..." 
+            f"User: {ctx[0]}\nBot: {ctx[1][:200]}..."
             for ctx in recent_context
         ])
 
-    final_query = f"""{context_str}
+    return f"""{context_str}
 
 CÂU HỎI HIỆN TẠI: {question}
-{enhanced_part}
 
-Hãy trả lời dựa trên LỊCH SỬ và câu hỏi hiện tại."""
-
-    return final_query
+Hãy trả lời dựa trên câu hỏi hiện tại. Chỉ tham khảo lịch sử nếu user đang hỏi tiếp về cùng topic."""
 
 def build_image_analysis_query(skin_analysis: str, additional_text: str = None) -> str:
     """Build RAG query based on Image Analysis Result"""
@@ -516,7 +634,7 @@ def check_severity(analysis: str) -> bool:
 # =============================================================================
 # PRODUCT SUGGESTION HELPERS
 # =============================================================================
-def get_product_suggestions_by_skin_types(db, skin_types: list, num_products: int = 3) -> list:
+def get_product_suggestions_by_skin_types(db, skin_types: list, num_products: int = 5) -> list:
     """
     Truy vấn sản phẩm phù hợp với loại da
     Returns: list of product names
@@ -531,7 +649,7 @@ def get_product_suggestions_by_skin_types(db, skin_types: list, num_products: in
         # Map tiếng Việt sang tiếng Anh
         vietnamese_to_english = {
             "Khô": "Dry",
-            "Thường": "Normal", 
+            "Thường": "Normal",
             "Dầu": "Oily",
             "Hỗn hợp": "Combination",
             "Nhạy cảm": "Sensitive"
@@ -578,8 +696,8 @@ def get_product_suggestions_by_skin_types(db, skin_types: list, num_products: in
                 metadata_str = str(doc.metadata).lower()
                 
                 match = any(
-                    term.lower() in content_lower or 
-                    term.lower() in metadata_str 
+                    term.lower() in content_lower or
+                    term.lower() in metadata_str
                     for term in search_terms
                 )
                 
