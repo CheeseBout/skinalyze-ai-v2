@@ -2,11 +2,13 @@
 RAG Cosmetic Chatbot Core - Stateless for NestJS Backend Integration
 Merged Features: 
 - Stateless design (NestJS handles session/history)
-- Advanced Skin Condition Detection
+- Advanced Skin Condition Detection (Length-prioritized matching)
 - Currency Conversion (USD -> VND)
 - Smart Product Grouping & Filtering (Improved)
 - VLM Skin Analysis (Base64/Bytes support)
 - Improved chunk_size and format_docs logic
+- Enhanced error handling from standalone
+- Comprehensive prompt template
 """
 
 import os
@@ -40,18 +42,25 @@ USD_TO_VND = 26349
 # Global cache for embeddings
 _CACHED_EMBEDDINGS = None
 
-# DATA MAPPING - EXTENDED
+# =============================================================================
+# DATA MAPPING - EXTENDED (Ưu tiên từ khóa DÀI trước, NGẮN sau)
+# =============================================================================
 SKIN_CONDITION_TO_SKIN_TYPE = {
-    #ƯU TIÊN Từ khóa DÀI/CỤ THỂ trước, NGẮN/CHUNG sau
+    # ⚠️ ƯU TIÊN: Từ khóa DÀI/CỤ THỂ trước, NGẮN/CHUNG sau để tránh nhầm lẫn
+    
+    # Mụn cóc (warts) - ƯU TIÊN TRƯỚC "mụn"
     "warts": ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"],
     "mụn cóc": ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"],
     "cóc": ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"],
     
+    # Mụn trứng cá - SAU "mụn cóc", TRƯỚC "mụn"
     "mụn trứng cá": ["Hỗn hợp", "Dầu", "Nhạy cảm"],
     
+    # Mụn (acne) - CUỐI CÙNG
     "acne": ["Hỗn hợp", "Dầu", "Nhạy cảm"],
     "mụn": ["Hỗn hợp", "Dầu", "Nhạy cảm"],
     
+    # Các bệnh khác
     "actinic keratosis": ["Khô", "Thường"],
     "da dày sừng": ["Khô", "Thường"],
     "dày sừng": ["Khô", "Thường"],
@@ -83,7 +92,23 @@ SKIN_CONDITION_TO_SKIN_TYPE = {
     "nấm": ["Hỗn hợp", "Dầu"],
 }
 
+# Danh sách bệnh da được hỗ trợ tư vấn (để kiểm tra phạm vi)
+SUPPORTED_SKIN_CONDITIONS = [
+    "mụn", "acne", "mụn trứng cá",
+    "chàm", "eczema", "viêm da",
+    "vảy nến", "psoriasis",
+    "trứng cá đỏ", "rosacea", "da đỏ",
+    "dày sừng", "actinic keratosis", "da dày sừng",
+    "nấm da", "tinea", "nấm",
+    "viêm da tiết bã", "seborrheic keratoses",
+    "tổn thương nắng", "sun damage", "hư tổn do nắng",
+    "mụn cóc", "warts", "cóc",
+    "phát ban thuốc", "drug eruption", "phát ban do thuốc"
+]
+
+# =============================================================================
 # HELPER FUNCTIONS
+# =============================================================================
 def setup_api_key():
     """Setup Google API Key"""
     api_key = os.getenv("GOOGLE_API_KEY")
@@ -98,14 +123,17 @@ def setup_api_key():
 
 def extract_product_name(chunk_text):
     """Trích xuất tên sản phẩm từ chunk text"""
+    # Tìm "Product Name: ..."
     match = re.search(r'Product Name:\s*(.+?)(?:\n|$)', chunk_text, re.IGNORECASE)
     if match:
         return match.group(1).strip()
     
+    # Tìm "Tên sản phẩm: ..."
     match = re.search(r'Tên sản phẩm:\s*(.+?)(?:\n|$)', chunk_text, re.IGNORECASE)
     if match:
         return match.group(1).strip()
     
+    # Fallback: lấy dòng đầu tiên có dấu :
     lines = chunk_text.split('\n')
     for line in lines:
         if ':' in line:
@@ -143,11 +171,14 @@ def convert_price_in_text(text):
 def detect_skin_condition_and_types(query):
     """
     Phát hiện bệnh da trong câu hỏi và trả về loại da phù hợp
+    Returns: (detected_condition, skin_types_list) hoặc (None, None)
+    
     ⚠️ ƯU TIÊN: Kiểm tra từ khóa DÀI trước (mụn cóc) rồi mới đến NGẮN (mụn)
+    để tránh nhầm lẫn khi "mụn cóc" chứa từ "mụn"
     """
     query_lower = query.lower()
     
-    # Sắp xếp theo độ dài từ khóa (dài -> ngắn)
+    # Sắp xếp theo độ dài từ khóa (dài -> ngắn) để ưu tiên match cụ thể trước
     sorted_conditions = sorted(
         SKIN_CONDITION_TO_SKIN_TYPE.items(),
         key=lambda x: len(x[0]),
@@ -160,17 +191,30 @@ def detect_skin_condition_and_types(query):
     
     return None, None
 
-# VECTOR STORE
+def is_supported_condition(condition):
+    """Kiểm tra bệnh da có trong danh sách hỗ trợ không"""
+    if not condition:
+        return False
+    condition_lower = condition.lower()
+    return any(supported in condition_lower or condition_lower in supported 
+               for supported in SUPPORTED_SKIN_CONDITIONS)
+
+# =============================================================================
+# VECTOR STORE - Enhanced Error Handling
+# =============================================================================
 def load_or_create_vectorstore():
-    """Load or create vector store with improved error handling"""
+    """Load or create vector store with comprehensive error handling"""
     global _CACHED_EMBEDDINGS
     
     print("=" * 80)
     print("📚 KHỞI TẠO VECTOR STORE")
     print("=" * 80)
     
+    db = None
+    embeddings = None
+    
     try:
-        # Load Embedding Model
+        # ----- Tải Embedding Model (với cache) -----
         if _CACHED_EMBEDDINGS is not None:
             print(f"\n⚡ Sử dụng cached embedding model")
             embeddings = _CACHED_EMBEDDINGS
@@ -179,20 +223,26 @@ def load_or_create_vectorstore():
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
             print(f"   🖥️ Sử dụng thiết bị: {device}")
             
-            embeddings = HuggingFaceEmbeddings(
-                model_name=MODEL_NAME,
-                model_kwargs={'device': device},
-                encode_kwargs={'normalize_embeddings': True}
-            )
-            _CACHED_EMBEDDINGS = embeddings
-            print("✅ Đã tải embedding model!\n")
+            try:
+                embeddings = HuggingFaceEmbeddings(
+                    model_name=MODEL_NAME,
+                    model_kwargs={'device': device},
+                    encode_kwargs={'normalize_embeddings': True}
+                )
+                _CACHED_EMBEDDINGS = embeddings
+                print("✅ Đã tải embedding model!\n")
+            except Exception as e_embed:
+                print(f"\n❌ LỖI NGHIÊM TRỌNG khi tải embedding model: {e_embed}")
+                print("   Kiểm tra lại tên model, kết nối mạng và cài đặt thư viện.")
+                return None, None
 
-        # Check existing DB
-        db = None
+        # ----- Load hoặc Tạo Database -----
         should_create_new = True
         
         if os.path.exists(PERSIST_DIRECTORY) and len(os.listdir(PERSIST_DIRECTORY)) > 0:
-            print(f"📂 Thư mục DB tồn tại: {PERSIST_DIRECTORY}")
+            print(f"📂 Phát hiện Vector Store có sẵn tại: {PERSIST_DIRECTORY}")
+            print("⏳ Đang load database...\n")
+            
             try:
                 db = Chroma(
                     persist_directory=str(PERSIST_DIRECTORY),
@@ -201,80 +251,143 @@ def load_or_create_vectorstore():
                 count = db._collection.count() if db._collection else 0
                 
                 if count > 0:
-                    print(f"✅ Đã load thành công {count} documents")
+                    print(f"✅ Đã load Vector Store thành công!")
+                    print(f"   📊 Số documents trong database: {count}\n")
                     should_create_new = False
                 else:
-                    print(f"⚠️  DB tồn tại nhưng RỖNG (0 docs). Sẽ tiến hành tạo lại...")
-            except Exception as e:
-                print(f"⚠️  Lỗi khi đọc DB cũ: {e}. Sẽ tạo mới...")
+                    print("   ⚠️ Database có sẵn nhưng RỖNG (0 docs). Sẽ tạo lại...")
+                    
+            except Exception as e_db_load:
+                print(f"\n❌ LỖI khi load Vector Store có sẵn: {e_db_load}")
+                print(f"   Thử xóa thư mục '{PERSIST_DIRECTORY}' và chạy lại để tạo mới.")
+                return None, embeddings
         
-        # Create new if needed
+        # ----- Tạo Database mới nếu cần -----
         if should_create_new:
             print(f"🆕 Bắt đầu tạo mới Vector Store từ {CHUNKS_FILE.name}...\n")
             
+            # Kiểm tra file tồn tại
             if not CHUNKS_FILE.exists():
-                raise FileNotFoundError(f"❌ KHÔNG TÌM THẤY FILE DATA: {CHUNKS_FILE}")
-            
-            loader = TextLoader(str(CHUNKS_FILE), encoding='utf-8')
-            documents = loader.load()
-            
-            text_splitter = RecursiveCharacterTextSplitter(
-                separators=["---"],
-                chunk_size=800,
-                chunk_overlap=100,
-                length_function=len
-            )
-            docs = text_splitter.split_documents(documents)
-            
-            # Add metadata
-            for doc in docs:
-                product_name = extract_product_name(doc.page_content)
-                doc.metadata['product_name'] = product_name
-
-            print(f"   ✓ Split into {len(docs)} chunks")
-            print("💾 Creating embeddings and saving...")
-            
-            # Batch processing
-            batch_size = 50
-            total_docs = len(docs)
-            
-            if total_docs == 0:
-                print("   ⚠️ Không có chunk nào để thêm vào database.")
+                print(f"❌ KHÔNG TÌM THẤY FILE DATA: {CHUNKS_FILE}")
                 return None, embeddings
             
-            db = Chroma.from_documents(
-                documents=docs[:batch_size],
-                embedding=embeddings,
-                persist_directory=str(PERSIST_DIRECTORY)
-            )
-            
-            for i in range(batch_size, total_docs, batch_size):
-                batch_end = min(i + batch_size, total_docs)
-                print(f"   Processing batch {i}/{total_docs}...", end='\r')
-                db.add_documents(docs[i:batch_end])
+            try:
+                # Load file chunks
+                print("📖 [1/4] Đang load file chunks...")
+                loader = TextLoader(str(CHUNKS_FILE), encoding='utf-8')
+                documents = loader.load()
+                print(f"   ✓ Đã load {len(documents)} document base")
                 
-                if device == 'cuda':
-                    torch.cuda.empty_cache()
-            
-            print(f"\n✅ Hoàn tất! Đã lưu {total_docs} vectors vào DB\n")
+                # Split documents
+                print("✂️  [2/4] Đang split thành từng chunk và thêm metadata...")
+                text_splitter = RecursiveCharacterTextSplitter(
+                    separators=["---"],
+                    chunk_size=800,
+                    chunk_overlap=100,
+                    length_function=len
+                )
+                docs = text_splitter.split_documents(documents)
+                
+                if not docs:
+                    print("   ⚠️ Không split được chunk nào. Kiểm tra file và separator.")
+                    return None, embeddings
+                
+                # Thêm metadata product_name cho mỗi chunk
+                for doc in docs:
+                    product_name = extract_product_name(doc.page_content)
+                    doc.metadata['product_name'] = product_name
+                
+                print(f"   ✓ Đã split thành {len(docs)} chunks với metadata product_name")
+                
+                # Tạo embeddings và lưu
+                print("💾 [3/4] Đang tạo embeddings và lưu vào database...")
+                print("   (Quá trình này có thể mất vài phút...)\n")
+                
+                start_time = time.time()
+                batch_size = 50
+                total_docs = len(docs)
+                
+                if total_docs == 0:
+                    print("   ⚠️ Không có chunk nào để thêm vào database.")
+                    return None, embeddings
+                
+                # Batch đầu tiên - tạo database
+                print(f"   ⏳ Đang xử lý batch 1/{(total_docs-1)//batch_size + 1}...")
+                db = Chroma.from_documents(
+                    documents=docs[:batch_size],
+                    embedding=embeddings,
+                    persist_directory=str(PERSIST_DIRECTORY)
+                )
+                
+                # Các batch tiếp theo
+                for i in range(batch_size, total_docs, batch_size):
+                    batch_end = min(i + batch_size, total_docs)
+                    batch_num = (i // batch_size) + 1
+                    total_batches = (total_docs - 1) // batch_size + 1
+                    
+                    print(f"   → Batch {batch_num}/{total_batches}: docs {i}-{batch_end}...", end='\r')
+                    
+                    try:
+                        db.add_documents(docs[i:batch_end])
+                    except Exception as batch_error:
+                        print(f"\n   ❌ Lỗi batch {batch_num}: {batch_error}")
+                    
+                    # Giải phóng bộ nhớ GPU
+                    if device == 'cuda':
+                        torch.cuda.empty_cache()
+                
+                end_time = time.time()
+                count_after = db._collection.count() if db._collection else 0
+                
+                print(f"\n   ✓ Hoàn thành sau {end_time - start_time:.2f} giây")
+                print(f"   📊 Đã tạo và lưu {count_after} vectors")
+                
+                if count_after != total_docs:
+                    print(f"   ⚠️ Cảnh báo: Số vector ({count_after}) không khớp số chunk ({total_docs})")
+                
+                print("\n✅ Đã tạo Vector Store thành công!")
+                
+            except FileNotFoundError as e_file:
+                print(f"\n❌ LỖI: {e_file}")
+                return None, embeddings
+            except Exception as e_create:
+                print(f"\n❌ LỖI khi tạo Vector Store: {e_create}")
+                import traceback
+                traceback.print_exc()
+                
+                # Xóa thư mục có thể bị tạo dở
+                if os.path.exists(PERSIST_DIRECTORY):
+                    try:
+                        import shutil
+                        shutil.rmtree(PERSIST_DIRECTORY)
+                        print(f"   Đã xóa thư mục '{PERSIST_DIRECTORY}' có thể bị lỗi.")
+                    except:
+                        pass
+                return None, embeddings
 
         return db, embeddings
         
-    except Exception as e:
-        print(f"\n❌ Error in Vector Store: {e}")
+    except Exception as e_global:
+        print(f"\n❌ ĐÃ XẢY RA LỖI KHÔNG XÁC ĐỊNH: {e_global}")
         import traceback
         traceback.print_exc()
         return None, None
 
-# RAG CHAIN SETUP
+# =============================================================================
+# RAG CHAIN SETUP - Enhanced Prompt & Format
+# =============================================================================
 def setup_rag_chain(db):
-    """Setup RAG chain with improved product grouping and metadata extraction"""
+    """Setup RAG chain with comprehensive prompt and smart product grouping"""
     print("\n" + "=" * 80)
     print("⛓️ KHỞI TẠO RAG CHAIN")
     print("=" * 80)
     
-    # LLM
-    print("\n🤖 [1/3] Connecting to Google Gemini...")
+    if db is None:
+        print("\n❌ LỖI: Vector store chưa được khởi tạo thành công!")
+        return None
+    
+    # 1. LLM Configuration (giữ nguyên thông số production)
+    print("\n🤖 [1/3] Đang kết nối với Google Gemini...")
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.0-flash",
         temperature=0.05,
@@ -283,65 +396,124 @@ def setup_rag_chain(db):
         request_options={"timeout": 90},
         max_retries=3
     )
-    print("   ✓ Connected to Gemini 2.0 Flash")
+    print("   ✓ Đã kết nối Gemini 2.0 Flash (temperature=0.05, max_tokens=1500)")
     
-    # Retriever
-    print("🔍 [2/3] Creating Retriever...")
+    # 2. Retriever
+    print("🔍 [2/3] Đang tạo Retriever...")
     retriever = db.as_retriever(
         search_type="similarity",
-        search_kwargs={
-            "k": 30
-        }
+        search_kwargs={"k": 30}
     )
-    print("   ✓ Retriever ready (Similarity Search, k=30)")
+    print("   ✓ Retriever: tìm 30 chunks relevant nhất (similarity search)")
     
-    # Prompt Template
-    print("📝 [3/3] Creating Prompt Template...")
-    template = """Bạn là chuyên gia tư vấn mỹ phẩm chuyên nghiệp, thân thiện và hiểu tâm lý khách hàng.
+    # 3. Enhanced Prompt Template (từ standalone)
+    print("📝 [3/3] Đang tạo Prompt Template...")
+    
+    template = """You are a strict assistant. You must answer questions based ONLY on the provided context below. DO NOT use your internal knowledge to update or guess prices. If the price is not mentioned in the context, say 'Price not available'.
+
+Bạn là chuyên gia tư vấn mỹ phẩm chuyên nghiệp, thân thiện và hiểu tâm lý khách hàng.
 
 PHÂN LOẠI CÂU HỎI VÀ CÁCH TRẢ LỜI:
 
 🔹 **CHÀO HỎI/GIAO TIẾP CƠ BẢN**
-Câu hỏi: "xin chào", "hi", "hello"
+Câu hỏi: "xin chào", "hi", "hello", "chào bạn", "hey"
 → "Chào bạn! 👋 Mình là trợ lý tư vấn mỹ phẩm. Bạn muốn tìm sản phẩm gì hôm nay? 😊"
 
+🔹 **HỎI VỀ CHỨC NĂNG/GIỚI THIỆU**
+Câu hỏi: "bạn là ai", "bạn làm gì", "có thể giúp gì", "bạn biết gì"
+→ "Mình là chuyên gia tư vấn mỹ phẩm! 💄 Mình có thể giúp bạn:
+• Tìm sản phẩm theo loại da (khô, dầu, nhạy cảm, hỗn hợp, thường)
+• Tư vấn sản phẩm theo BỆNH DA (mụn, chàm, vảy nến, trứng cá đỏ, nấm da...)
+• Tư vấn kem dưỡng, serum, toner, mặt nạ, sữa rửa mặt, kem chống nắng
+• Giải thích thành phần và công dụng sản phẩm
+Bạn đang gặp vấn đề gì về da hoặc cần tìm sản phẩm nào? 😊"
+
+🔹 **HỎI CHUNG CHUNG KHÔNG CỤ THỂ**
+Câu hỏi: "có sản phẩm gì", "cho xem sản phẩm", "gợi ý sản phẩm"
+→ "Mình có rất nhiều sản phẩm! 😊 Để tư vấn chính xác, bạn cho mình biết:
+• Loại da của bạn? (khô/dầu/hỗn hợp/nhạy cảm/thường)
+• Bệnh da (nếu có)? (mụn/chàm/vảy nến/trứng cá đỏ/nấm da...)
+• Loại sản phẩm cần? (kem dưỡng/serum/toner/mặt nạ/sữa rửa mặt...)
+Cho mình biết để mình tư vấn đúng nhu cầu nhé! 💕"
+
 🔹 **HỎI VỀ BỆNH DA (ƯU TIÊN CAO)**
-Câu hỏi: "tôi bị mụn", "chàm", "vảy nến", "nấm da"...
-→ ĐI THẲNG VÀO: "Dạ, mình gợi ý sản phẩm cho [bệnh da] nhé:
+Câu hỏi: "tôi bị mụn", "tôi bị chàm", "da bị vảy nến", "bị trứng cá đỏ", "nấm da", "mụn cóc"...
+
+⚠️ **KIỂM TRA PHẠM VI TƯ VẤN:**
+→ CHỈ tư vấn cho CÁC BỆNH DA SAU (có trong database):
+   • Mụn (Acne) → Hỗn hợp/Dầu/Nhạy cảm
+   • Chàm (Eczema) → Hỗn hợp/Khô/Thường/Dầu/Nhạy cảm
+   • Vảy nến (Psoriasis) → Khô
+   • Trứng cá đỏ (Rosacea) → Hỗn hợp/Dầu/Nhạy cảm
+   • Dày sừng (Actinic Keratosis) → Khô/Thường
+   • Nấm da (Tinea) → Hỗn hợp/Dầu
+   • Viêm da tiết bã (Seborrheic Keratoses) → Thường/Dầu/Nhạy cảm
+   • Tổn thương nắng (Sun Damage) → Hỗn hợp/Khô/Thường/Nhạy cảm
+   • Mụn cóc (Warts) → Hỗn hợp/Khô/Thường/Dầu/Nhạy cảm
+   • Phát ban thuốc (Drug Eruption) → Hỗn hợp/Khô/Thường/Dầu/Nhạy cảm
+
+→ **NẾU BỆNH DA KHÔNG TRONG DANH SÁCH TRÊN** (vd: ghẻ, lang ben, zona, herpes...):
+   "⚠️ Xin lỗi, bệnh [tên bệnh] NẰM NGOÀI PHẠM VI tư vấn mỹ phẩm của mình.
+   
+   🏥 KHUYẾN CÁO:
+   • Đây là bệnh da CẦN ĐIỀU TRỊ Y KHOA
+   • Vui lòng ĐẶT LỊCH GẶP BÁC SĨ DA LIỄU để được khám và kê đơn thuốc phù hợp
+   
+   💡 Mình có thể tư vấn mỹ phẩm cho các vấn đề da thông thường như: mụn, chàm, vảy nến... Bạn có vấn đề da nào trong số này không?"
+
+→ **NẾU BỆNH DA CÓ TRONG DANH SÁCH - TRẢ LỜI NGẮN GỌN:**
+   "Dạ, mình gợi ý sản phẩm cho [tên bệnh] nhé:
    [LIỆT KÊ 2-3 SẢN PHẨM NGAY]"
    
-⚠️ QUAN TRỌNG: 
-• CHỈ trả lời về bệnh da được NÊU TRONG CÂU HỎI HIỆN TẠI
-• KHÔNG được nhắc lại hoặc nhầm lẫn với câu hỏi trước
-• KHÔNG cần giải thích dài dòng
+   ⚠️ QUAN TRỌNG: 
+   • CHỈ trả lời về bệnh da được NÊU TRONG CÂU HỎI HIỆN TẠI
+   • KHÔNG được nhắc lại hoặc nhầm lẫn với câu hỏi trước
+   • KHÔNG cần giải thích dài dòng
 
-🔹 **HỎI VỀ VẤN ĐỀ DA/LOẠI SẢN PHẨM**
-Câu hỏi: "da khô", "da dầu", "kem dưỡng", "serum"...
-→ Gợi ý 2-3 sản phẩm PHÙ HỢP từ database.
+🔹 **HỎI VỀ VẤN ĐỀ DA (KHÔNG PHẢI BỆNH)**
+Câu hỏi: "da tôi khô", "da dầu nhiều", "da nhạy cảm"
+→ ĐI THẲNG VÀO: "Dạ, mình gợi ý sản phẩm cho da [loại da] nhé:
+   [LIỆT KÊ 2-3 SẢN PHẨM NGAY]"
+
+🔹 **HỎI THEO LOẠI SẢN PHẨM**
+Câu hỏi: "có kem dưỡng nào...", "serum gì tốt", "toner cho da..."
+→ ĐI THẲNG VÀO SẢN PHẨM, mặc định 2-3 sản phẩm
+
+🔹 **HỎI VỀ THƯƠNG HIỆU**
+Câu hỏi: "bạn có [tên thương hiệu] không"
+→ Kiểm tra database, nếu có thì liệt kê, nếu không: "Mình chưa có thông tin về [brand] trong database. Bạn muốn tư vấn sản phẩm theo loại da không? 🔍"
 
 🔹 **HỎI GIÁ/MUA Ở ĐÂU**
-→ "Xin lỗi, mình chỉ tư vấn về sản phẩm. Bạn có thể mua tại store chính hãng. Mình tư vấn thêm sản phẩm khác nhé? 😊"
+→ "Xin lỗi, mình chỉ tư vấn về sản phẩm thôi nhé. Bạn có thể mua tại các store chính hãng. Mình tư vấn thêm sản phẩm khác không? 😊"
+
+🔹 **CẢM ƠN/TẠM BIỆT**
+→ "Không có gì! 😊 Chúc bạn có làn da đẹp! Hẹn gặp lại! 💕"
+
+🔹 **CÂU HỎI NGOÀI LỀ**
+→ "Xin lỗi, mình chỉ chuyên về mỹ phẩm và skincare thôi 💄 Bạn có muốn hỏi về chăm sóc da không?"
 
 ---
 
 **CHÚ Ý KHI TRẢ LỜI:**
+- Luôn THÂN THIỆN, dùng "mình/bạn"
 - **NGẮN GỌN - ĐI THẲNG VÀO SẢN PHẨM**
-- **⚠️ TẬP TRUNG VÀO CÂU HỎI HIỆN TẠI** - không nhắc lại câu hỏi cũ
+- **⚠️ TẬP TRUNG VÀO CÂU HỎI HIỆN TẠI** - không nhắc câu hỏi cũ
 - **GROUNDING:** CHỈ GỢI Ý sản phẩm CÓ TRONG DATABASE
+  • Nếu context chứa "KHÔNG TÌM THẤY SẢN PHẨM" → trả lời:
+    "Xin lỗi, mình không tìm thấy sản phẩm phù hợp. 😔 Bạn thử mô tả chi tiết hơn?"
+  • TUYỆT ĐỐI KHÔNG TỰ BỊA sản phẩm
 - **SỐ LƯỢNG:** Mặc định 2-3 sản phẩm (tối đa 3)
-- **⚠️ FORMAT MỖI SẢN PHẨM (BẮT BUỘC ĐIỀN ĐẦY ĐỦ):**
+- **⚠️ FORMAT MỖI SẢN PHẨM (BẮT BUỘC):**
   **Số. Tên sản phẩm của THƯƠNG HIỆU** 
   Giá: XXX.XXX VND | Đánh giá: X/5 | Loại da: [...]
   
-  ⚠️ QUAN TRỌNG: 
-  • BẮT BUỘC phải có ĐẦY ĐỦ: Tên, Thương hiệu, Giá, Đánh giá, Loại da
-  • KHÔNG hiển thị công dụng hoặc thành phần
+  ⚠️ BẮT BUỘC: Tên, Thương hiệu, Giá, Đánh giá, Loại da
   • NẾU thiếu thông tin → ghi "(Không có thông tin)"
-  • TẤT CẢ sản phẩm phải có FORMAT GIỐNG NHAU
+  • KHÔNG hiển thị công dụng hoặc thành phần
+- **GIÁ:** CHỈ HIỂN THỊ VND, KHÔNG USD
 - **LOẠI DA PHẢI DỊCH SANG TIẾNG VIỆT:**
   Combination → Hỗn hợp | Dry → Khô | Normal → Thường | Oily → Dầu | Sensitive → Nhạy cảm
-- **CHỈ HIỂN THỊ VND**, KHÔNG USD
-- Dùng emoji phù hợp: 😊💄✨💕
+- Dùng emoji phù hợp: 😊💄✨💕👋
 
 THÔNG TIN SẢN PHẨM:
 {context}
@@ -351,26 +523,28 @@ CÂU HỎI: {question}
 TRẢ LỜI (2-3 sản phẩm):"""
     
     prompt = ChatPromptTemplate.from_template(template)
+    print("   ✓ Đã tạo Prompt Template (comprehensive + grounding)")
     
+    # 4. Format docs function với metadata extraction
     def format_docs(docs):
         """
         Format documents: NHÓM chunks theo product_name,
         trích xuất metadata, sắp xếp theo relevance,
         chọn top 3 sản phẩm với thông tin đầy đủ
         """
+        # GROUNDING CHECK
         if not docs or len(docs) == 0:
             return "KHÔNG TÌM THẤY SẢN PHẨM TRONG DATABASE"
         
         print(f"   🔍 Tìm được {len(docs)} chunks từ database")
         
-        # Nhóm chunks theo product_name
+        # Bước 1: Nhóm chunks theo product_name
         product_groups = {}
         
         for idx, doc in enumerate(docs):
             product_name = doc.metadata.get('product_name', 'Unknown Product')
             
             if product_name not in product_groups:
-                # Trích xuất metadata
                 metadata = {
                     'brand': extract_field_from_chunk(doc.page_content, 'Brand'),
                     'category': extract_field_from_chunk(doc.page_content, 'Category'),
@@ -383,12 +557,16 @@ TRẢ LỜI (2-3 sản phẩm):"""
                     'chunks': [],
                     'first_index': idx,
                     'metadata': metadata,
-                    'has_summary': False
+                    'has_summary': False,
+                    'has_ingredients': False
                 }
             
             # Đánh dấu loại chunk
-            if 'chunk type: product summary' in doc.page_content.lower():
+            content_lower = doc.page_content.lower()
+            if 'chunk type: product summary' in content_lower:
                 product_groups[product_name]['has_summary'] = True
+            if 'chunk type: ingredients' in content_lower:
+                product_groups[product_name]['has_ingredients'] = True
             
             product_groups[product_name]['chunks'].append(doc)
         
@@ -397,28 +575,28 @@ TRẢ LỜI (2-3 sản phẩm):"""
         
         print(f"   📦 Tìm được {len(product_groups)} sản phẩm khác nhau")
         
-        # Lọc sản phẩm có summary
+        # Bước 2: Lọc sản phẩm có đủ thông tin (ưu tiên có summary)
         complete_products = [(name, data) for name, data in product_groups.items() if data['has_summary']]
         
         if not complete_products:
             complete_products = list(product_groups.items())
         
-        # Sắp xếp theo relevance
+        # Bước 3: Sắp xếp theo relevance (first_index)
         sorted_products = sorted(complete_products, key=lambda x: x[1]['first_index'])
         
-        # Chọn top 3
+        # Bước 4: Chọn top 3 sản phẩm
         num_products = min(3, len(sorted_products))
         selected_products = sorted_products[:num_products]
         
         print(f"   ✅ Chọn {num_products} sản phẩm để tư vấn")
         
-        # Format
+        # Bước 5: Format output
         formatted = []
         for i, (product_name, data) in enumerate(selected_products, 1):
             chunks = data['chunks']
             metadata = data['metadata']
             
-            # Loại bỏ duplicate
+            # Loại bỏ duplicate chunks
             seen_contents = set()
             unique_chunks = []
             for chunk in chunks:
@@ -427,7 +605,7 @@ TRẢ LỜI (2-3 sản phẩm):"""
                     seen_contents.add(content_hash)
                     unique_chunks.append(chunk)
             
-            # Sắp xếp: Summary trước
+            # Sắp xếp: Summary trước, Ingredients sau
             def chunk_priority(chunk):
                 content = chunk.page_content.lower()
                 if 'chunk type: product summary' in content:
@@ -439,7 +617,7 @@ TRẢ LỜI (2-3 sản phẩm):"""
             
             sorted_chunks = sorted(unique_chunks, key=chunk_priority)
             
-            # Gộp thông tin
+            # Gộp thông tin sản phẩm
             product_info = f"{'='*80}\n"
             product_info += f"SẢN PHẨM #{i}: {product_name}\n"
             product_info += f"{'='*80}\n"
@@ -469,6 +647,7 @@ TRẢ LỜI (2-3 sản phẩm):"""
         
         return "\n\n".join(formatted)
     
+    # Build RAG chain
     rag_chain = (
         {
             "context": retriever | format_docs,
@@ -479,31 +658,46 @@ TRẢ LỜI (2-3 sản phẩm):"""
         | StrOutputParser()
     )
     
-    print("\n✅ RAG Chain ready!\n")
+    print("\n✅ RAG Chain đã sẵn sàng!")
+    print("\n📊 Luồng hoạt động (CẢI TIẾN):")
+    print("   1️⃣  User Question → Retriever")
+    print("   2️⃣  Retriever → 30 chunks (similarity search)")
+    print("   3️⃣  Trích xuất metadata từ chunks")
+    print("   4️⃣  NHÓM theo product_name + Filter sản phẩm có đủ thông tin")
+    print("   5️⃣  Sắp xếp theo relevance → Chọn top 3 sản phẩm")
+    print("   6️⃣  Loại bỏ duplicate + Sắp xếp: Summary → Ingredients")
+    print("   7️⃣  Format structured với metadata rõ ràng")
+    print("   8️⃣  Context + Question → LLM → 2-3 sản phẩm CHÍNH XÁC ⚡")
     
     return rag_chain
 
-# VISION ANALYSIS - STATELESS
+# =============================================================================
+# VISION ANALYSIS - STATELESS (Base64/Bytes/PIL/Path support)
+# =============================================================================
 def analyze_skin_image(image_input, note: str = None):
     """
-    Analyze skin image - STATELESS version
+    Analyze skin image - STATELESS version with severity detection
     Args:
         image_input: PIL Image, base64 string, bytes, or file path
+        note: Additional note from user
     Returns:
         str: Analysis result
     """
     try:
         print("\n📸 Analyzing skin image...")
         
-        # Handle input types
+        # Handle multiple input types
         img = None
         if isinstance(image_input, str):
+            # Check for data URI
             if image_input.startswith('data:image'):
                 image_input = image_input.split(',')[1]
             try:
+                # Try base64 decode
                 image_bytes = base64.b64decode(image_input)
                 img = Image.open(io.BytesIO(image_bytes))
             except:
+                # Try file path
                 img = Image.open(image_input)
         elif isinstance(image_input, Image.Image):
             img = image_input
@@ -520,18 +714,20 @@ def analyze_skin_image(image_input, note: str = None):
 1. LOẠI DA: (khô/dầu/hỗn hợp/nhạy cảm/thường)
 
 2. VẤN ĐỀ CHÍNH & MỨC ĐỘ NGHIÊM TRỌNG:
-- Nếu có mụn: loại mụn, mức độ (NHẸ/TRUNG BÌNH/NẶNG/RẤT NẶNG)
-- Nếu có thâm/sẹo: mức độ, màu sắc
-- Nếu có lão hóa: mức độ
+- Nếu có mụn: loại mụn (viêm/đầu đen/đầu trắng/bọc), mức độ (NHẸ/TRUNG BÌNH/NẶNG/RẤT NẶNG)
+- Nếu có thâm/sẹo: mức độ (NHẸ/TRUNG BÌNH/NẶNG/RẤT NẶNG), màu sắc, phân bố
+- Nếu có lão hóa: mức độ (NHẸ/TRUNG BÌNH/NẶNG)
+- Nếu có vấn đề khác: nêu rõ
 
 3. MỨC ĐỘ CHUNG: Chọn 1 trong 4 (QUAN TRỌNG):
-   - NHẸ: Vấn đề nhỏ, tự chăm sóc.
-   - TRUNG BÌNH: Cần sản phẩm chuyên dụng.
-   - NẶNG: Viêm nhiều, cần điều trị tích cực.
-   - RẤT NẶNG: Viêm trầm trọng, sẹo nhiều, CẦN GẶP BÁC SĨ.
+   - NHẸ: Vấn đề nhỏ, ít nốt, có thể tự chăm sóc
+   - TRUNG BÌNH: Vấn đề rõ ràng, nhiều nốt, cần sản phẩm chuyên dụng
+   - NẶNG: Vấn đề lan rộng, viêm nhiều, cần điều trị tích cực
+   - RẤT NẶNG: Viêm trầm trọng, sẹo nhiều, CẦN GẶP BÁC SĨ
 
 4. GỢI Ý: (1 câu ngắn)
 
+QUAN TRỌNG: Phải ghi rõ MỨC ĐỘ.
 Trả lời NGẮN GỌN, bằng tiếng Việt."""
 
         if note:
@@ -542,11 +738,16 @@ Trả lời NGẮN GỌN, bằng tiếng Việt."""
         print("✅ Analysis complete!")
         return analysis
         
+    except FileNotFoundError:
+        print(f"❌ Không tìm thấy file ảnh")
+        return None
     except Exception as e:
         print(f"❌ Error analyzing image: {str(e)}")
         return None
 
+# =============================================================================
 # HELPER FUNCTIONS FOR NESTJS INTEGRATION
+# =============================================================================
 def analyze_with_context(question: str, conversation_history: list = None) -> str:
     """
     Analyze question with conversation context + Skin Condition Logic
@@ -556,7 +757,7 @@ def analyze_with_context(question: str, conversation_history: list = None) -> st
     detected_condition, suitable_skin_types = detect_skin_condition_and_types(question)
     
     if detected_condition:
-        # CÓ BỆNH DA → Không dùng context, chỉ mapping sang tiếng Anh
+        # CÓ BỆNH DA → Không dùng context, mapping sang tiếng Anh
         skin_types_mapping = {
             "Khô": "Dry",
             "Thường": "Normal",
@@ -587,7 +788,7 @@ CÂU HỎI HIỆN TẠI: {question}
 Hãy trả lời dựa trên câu hỏi hiện tại. Chỉ tham khảo lịch sử nếu user đang hỏi tiếp về cùng topic."""
 
 def build_image_analysis_query(skin_analysis: str, additional_text: str = None) -> str:
-    """Build RAG query based on Image Analysis Result"""
+    """Build RAG query based on Image Analysis Result with severity awareness"""
     is_severe = any(keyword in skin_analysis.upper() for keyword in ['RẤT NẶNG', 'RẤT NGHIÊM TRỌNG', 'CẦN GẶP BÁC SĨ'])
     
     warning = "(RẤT NGHIÊM TRỌNG - CẦN GẶP BÁC SĨ)" if is_severe else "(từ phân tích ảnh)"
@@ -603,13 +804,16 @@ def build_image_analysis_query(skin_analysis: str, additional_text: str = None) 
 
 def check_severity(analysis: str) -> bool:
     """Check if skin condition is severe"""
-    if not analysis: return False
+    if not analysis:
+        return False
     return any(keyword in analysis.upper() for keyword in ['RẤT NẶNG', 'RẤT NGHIÊM TRỌNG'])
 
+# =============================================================================
 # PRODUCT SUGGESTION HELPERS
+# =============================================================================
 def get_product_suggestions_by_skin_types(db, skin_types: list, num_products: int = 5) -> list:
     """
-    Truy vấn sản phẩm phù hợp với loại da
+    Truy vấn sản phẩm phù hợp với loại da (bilingual search)
     Returns: list of product names
     """
     if not db or not skin_types:
@@ -682,8 +886,9 @@ def get_product_suggestions_by_skin_types(db, skin_types: list, num_products: in
                     if len(product_names) >= num_products:
                         break
         
+        # Fallback: add general products if not enough
         if len(product_names) < num_products:
-            print(f"⚠️ Only found {len(product_names)} matching products, adding general products...")
+            print(f"⚠️ Only found {len(product_names)} matching products, adding general...")
             for doc in docs:
                 product_name = doc.metadata.get('product_name')
                 if not product_name:
@@ -734,6 +939,7 @@ def map_disease_to_skin_types(disease_class: str) -> list:
             print(f"✓ Mapped to skin types: {skin_types}")
             return skin_types
     
+    # Fallback to SKIN_CONDITION_TO_SKIN_TYPE
     for condition_key, skin_types in SKIN_CONDITION_TO_SKIN_TYPE.items():
         if condition_key in disease_lower or disease_lower in condition_key:
             print(f"✓ Mapped via SKIN_CONDITION_TO_SKIN_TYPE: {skin_types}")
