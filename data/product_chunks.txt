@@ -5201,6 +5201,19 @@ Brand: LANCER
 Ingredients excerpt: ..., Methylisothiazolinone, Methylchloroisothiazolinone, Fragrance, Limonene, Iron Oxides (CI 77492).
 ---
 Chunk Type: Product Summary
+Product Name: Micellar Cleansing Water & Milk - Pomegranate
+Brand: SEPHORA COLLECTION
+Category: Cleanser
+Suitable for: Combination, Dry, Normal, Oily, Sensitive
+Rank: 4.2/5.0
+Price: $7
+---
+Chunk Type: Ingredients
+Product Name: Micellar Cleansing Water & Milk - Pomegranate
+Brand: SEPHORA COLLECTION
+Ingredients: No Info
+---
+Chunk Type: Product Summary
 Product Name: Martian Mattifying Melting Water-Gel Toner
 Brand: SUNDAY RILEY
 Category: Cleanser
@@ -13543,6 +13556,19 @@ Brand: FRESH
 Ingredients excerpt: ... Chlorphenesin, Acrylates/C10-30 Alkyl Acrylate Crosspolymer, Polyisobutene, Poloxamer 407, Xanthan Gum, Sodium Hydroxide, Parfum (Fragrance), Disodium EDTA, Sorbitan Isostearate, Hydrogenated Palm Glycerides, Glyceryl Acrylate/Acrylic Acid Copolymer, Polysorbate 20, Biosaccharide Gum-2, Caramel, Sodium Metabisulfite, Sodium Benzoate, Phenoxyethanol, Benzyl Salicylate.
 ---
 Chunk Type: Product Summary
+Product Name: One Essential Eye Serum
+Brand: DIOR
+Category: Eye cream
+Suitable for: Combination, Normal
+Rank: 4.5/5.0
+Price: $72
+---
+Chunk Type: Ingredients
+Product Name: One Essential Eye Serum
+Brand: DIOR
+Ingredients: No Info
+---
+Chunk Type: Product Summary
 Product Name: Peat Miracle Revital Eye Cream
 Brand: BELIF
 Category: Eye cream
@@ -14688,6 +14714,19 @@ Chunk Type: Ingredients
 Product Name: BB Eye Cream with Soothing Cornflower
 Brand: KLORANE
 Ingredients excerpt: ...earate, Phenethyl Alcohol, Polymethyl Methacrylate, Polysorbate 60, Propylene Gylcol, Sodium Dextran Sulfate, Sodium Hyaluronate, Sodium Hydroxide, Sorbitan Isostearate, Talc, Tin Oxide, Titanium Dioxide (CI77891), Titanium Dioxide, Tocopherol, Tocopheryl Acetate, Viburnum Prunifolium Extract, Xanthan Gum.
+---
+Chunk Type: Product Summary
+Product Name: Go-Go Eyes
+Brand: CLINIQUE
+Category: Eye cream
+Suitable for: Combination, Dry, Normal, Oily, Sensitive
+Rank: 3.7/5.0
+Price: $26
+---
+Chunk Type: Ingredients
+Product Name: Go-Go Eyes
+Brand: CLINIQUE
+Ingredients: No Info
 ---
 Chunk Type: Product Summary
 Product Name: DayWear Eye Cooling Anti-Oxidant Moisture GelCreme

@@ -28,9 +28,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 
-# =============================================================================
 # CONFIGURATION
-# =============================================================================
 PATH = Path(__file__).parent.resolve()
 CHUNKS_FILE = PATH / "data" / "product_chunks.txt"
 PERSIST_DIRECTORY = PATH / "db_chroma"
@@ -42,11 +40,9 @@ USD_TO_VND = 26349
 # Global cache for embeddings
 _CACHED_EMBEDDINGS = None
 
-# =============================================================================
-# DATA MAPPING - EXTENDED (ƯU TIÊN TỪ KHÓA DÀI TRƯỚC)
-# =============================================================================
+# DATA MAPPING - EXTENDED
 SKIN_CONDITION_TO_SKIN_TYPE = {
-    # ⚠️ ƯU TIÊN: Từ khóa DÀI/CỤ THỂ trước, NGẮN/CHUNG sau
+    #ƯU TIÊN Từ khóa DÀI/CỤ THỂ trước, NGẮN/CHUNG sau
     "warts": ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"],
     "mụn cóc": ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"],
     "cóc": ["Hỗn hợp", "Khô", "Thường", "Dầu", "Nhạy cảm"],
@@ -87,9 +83,7 @@ SKIN_CONDITION_TO_SKIN_TYPE = {
     "nấm": ["Hỗn hợp", "Dầu"],
 }
 
-# =============================================================================
 # HELPER FUNCTIONS
-# =============================================================================
 def setup_api_key():
     """Setup Google API Key"""
     api_key = os.getenv("GOOGLE_API_KEY")
@@ -166,9 +160,7 @@ def detect_skin_condition_and_types(query):
     
     return None, None
 
-# =============================================================================
 # VECTOR STORE
-# =============================================================================
 def load_or_create_vectorstore():
     """Load or create vector store with improved error handling"""
     global _CACHED_EMBEDDINGS
@@ -226,11 +218,10 @@ def load_or_create_vectorstore():
             loader = TextLoader(str(CHUNKS_FILE), encoding='utf-8')
             documents = loader.load()
             
-            # ✅ IMPROVED: Tăng chunk_size và overlap để giữ thông tin đầy đủ
             text_splitter = RecursiveCharacterTextSplitter(
                 separators=["---"],
-                chunk_size=800,  # Tăng từ 400 lên 800
-                chunk_overlap=100,  # Tăng từ 50 lên 100
+                chunk_size=800,
+                chunk_overlap=100,
                 length_function=len
             )
             docs = text_splitter.split_documents(documents)
@@ -275,9 +266,7 @@ def load_or_create_vectorstore():
         traceback.print_exc()
         return None, None
 
-# =============================================================================
-# RAG CHAIN SETUP - IMPROVED
-# =============================================================================
+# RAG CHAIN SETUP
 def setup_rag_chain(db):
     """Setup RAG chain with improved product grouping and metadata extraction"""
     print("\n" + "=" * 80)
@@ -288,8 +277,8 @@ def setup_rag_chain(db):
     print("\n🤖 [1/3] Connecting to Google Gemini...")
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.0-flash",
-        temperature=0.05,  # Giảm xuống 0.05 để ổn định hơn
-        max_output_tokens=1500,  # Tăng lên 1500
+        temperature=0.05,
+        max_output_tokens=1500,
         convert_system_message_to_human=True,
         request_options={"timeout": 90},
         max_retries=3
@@ -299,9 +288,9 @@ def setup_rag_chain(db):
     # Retriever
     print("🔍 [2/3] Creating Retriever...")
     retriever = db.as_retriever(
-        search_type="similarity",  # Đổi sang similarity
+        search_type="similarity",
         search_kwargs={
-            "k": 30  # Tăng lên 30 để lấy đủ chunks
+            "k": 30
         }
     )
     print("   ✓ Retriever ready (Similarity Search, k=30)")
@@ -363,7 +352,6 @@ TRẢ LỜI (2-3 sản phẩm):"""
     
     prompt = ChatPromptTemplate.from_template(template)
     
-    # ✅ IMPROVED: format_docs với metadata extraction và structured format
     def format_docs(docs):
         """
         Format documents: NHÓM chunks theo product_name,
@@ -492,21 +480,10 @@ TRẢ LỜI (2-3 sản phẩm):"""
     )
     
     print("\n✅ RAG Chain ready!\n")
-    print("📊 Luồng hoạt động (CẢI TIẾN):")
-    print("   1️⃣  User Question → Retriever")
-    print("   2️⃣  Retriever → 30 chunks (similarity search)")
-    print("   3️⃣  Trích xuất metadata từ chunks")
-    print("   4️⃣  NHÓM theo product_name + Filter sản phẩm có summary")
-    print("   5️⃣  Sắp xếp theo relevance → Chọn top 3 sản phẩm")
-    print("   6️⃣  Loại bỏ duplicate + Sắp xếp: Summary → Ingredients")
-    print("   7️⃣  Format structured với metadata rõ ràng")
-    print("   8️⃣  Context + Question → LLM → 3 sản phẩm CHÍNH XÁC & ĐẦY ĐỦ ⚡\n")
     
     return rag_chain
 
-# =============================================================================
 # VISION ANALYSIS - STATELESS
-# =============================================================================
 def analyze_skin_image(image_input, note: str = None):
     """
     Analyze skin image - STATELESS version
@@ -569,9 +546,7 @@ Trả lời NGẮN GỌN, bằng tiếng Việt."""
         print(f"❌ Error analyzing image: {str(e)}")
         return None
 
-# =============================================================================
 # HELPER FUNCTIONS FOR NESTJS INTEGRATION
-# =============================================================================
 def analyze_with_context(question: str, conversation_history: list = None) -> str:
     """
     Analyze question with conversation context + Skin Condition Logic
@@ -631,9 +606,7 @@ def check_severity(analysis: str) -> bool:
     if not analysis: return False
     return any(keyword in analysis.upper() for keyword in ['RẤT NẶNG', 'RẤT NGHIÊM TRỌNG'])
 
-# =============================================================================
 # PRODUCT SUGGESTION HELPERS
-# =============================================================================
 def get_product_suggestions_by_skin_types(db, skin_types: list, num_products: int = 5) -> list:
     """
     Truy vấn sản phẩm phù hợp với loại da
