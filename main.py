@@ -136,7 +136,7 @@ def load_classification_model():
             nn.Linear(num_features, 512),         # Layer 1: 1280 → 512
             nn.BatchNorm1d(512),                  # Layer 2: BatchNorm
             nn.ReLU(),                            # Layer 3: ReLU
-            nn.Dropout(p=dropout2),              # Layer 4: Dropout 0.3
+            nn.Dropout(p=dropout2),               # Layer 4: Dropout 0.3
             nn.Linear(512, 256),                  # Layer 5: 512 → 256
             nn.BatchNorm1d(256),                  # Layer 6: BatchNorm
             nn.ReLU(),                            # Layer 7: ReLU
@@ -480,9 +480,13 @@ async def classify_skin_disease(
     notes: Optional[str] = Form(None)
 ) -> Dict:
     """
-    Classify skin disease using EfficientNet.
-    Checks for face visibility ONLY if notes == 'facial'.
-    Returns product suggestions based on detected disease.
+    Classify skin disease using EfficientNet with Segmentation Pre-processing.
+    Flow:
+    1. Check Face (if notes='facial') using Mediapipe.
+    2. Segment Lesion using SAM2.
+    3. Apply Black Background (masking).
+    4. Classify using EfficientNet on the masked image.
+    5. Suggest products using RAG.
     """
     if state.classification_model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
@@ -494,7 +498,7 @@ async def classify_skin_disease(
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert("RGB")
 
-        # Conditional Face Detection
+        # 1. Conditional Face Detection
         if notes == 'facial':
             if state.face_detector:
                 image_np = np.array(image)
@@ -508,7 +512,57 @@ async def classify_skin_disease(
             else:
                 print("⚠️ Face detector skipped (not loaded)")
 
-        input_tensor = IMAGE_TRANSFORMS['classification'](image).unsqueeze(0).to(device)
+        # 2. & 3. Segmentation & Black Background Masking
+        # Logic: Dùng SAM2 tách bệnh -> Ghép lên nền đen -> Đưa vào classification
+        processed_image = image  # Default fallback: dùng ảnh gốc
+        
+        if state.segmentation_model:
+            try:
+                # Convert PIL to Numpy
+                image_np = np.array(image)
+                
+                # Set image for SAM2 predictor
+                state.segmentation_model.set_image(image_np)
+                
+                # Predict mask (Auto segmentation logic similar to segmentation endpoint)
+                masks, scores, _ = state.segmentation_model.predict(
+                    point_coords=None, point_labels=None, box=None, multimask_output=False
+                )
+                
+                # Nếu tìm thấy mask
+                if len(masks) > 0:
+                    mask = masks[0]
+                    
+                    # Normalize mask to 0-255 uint8
+                    if mask.dtype == bool:
+                        mask = mask.astype(np.uint8) * 255
+                    elif mask.max() <= 1:
+                        mask = (mask * 255).astype(np.uint8)
+                    
+                    # Tạo background đen
+                    black_bg = Image.new("RGB", image.size, (0, 0, 0))
+                    
+                    # Convert mask to PIL L mode
+                    mask_pil = Image.fromarray(mask).convert("L")
+                    
+                    # Resize mask nếu không khớp (đề phòng)
+                    if mask_pil.size != image.size:
+                        mask_pil = mask_pil.resize(image.size, Image.NEAREST)
+                    
+                    # Ghép ảnh gốc lên nền đen thông qua mask
+                    # Ảnh gốc sẽ chỉ hiện ở vùng trắng của mask, còn lại là đen
+                    processed_image = Image.composite(image, black_bg, mask_pil)
+                    print("✅ Applied segmentation mask for classification (Black Background)")
+                else:
+                    print("⚠️ No mask detected by SAM2, using original image")
+                    
+            except Exception as seg_err:
+                print(f"⚠️ Segmentation step failed: {seg_err}. Proceeding with original image.")
+                processed_image = image # Fallback an toàn
+
+        # 4. Classification
+        # Sử dụng processed_image (đã tách nền đen hoặc ảnh gốc nếu lỗi)
+        input_tensor = IMAGE_TRANSFORMS['classification'](processed_image).unsqueeze(0).to(device)
         
         with torch.no_grad():
             outputs = state.classification_model(input_tensor)
@@ -528,7 +582,7 @@ async def classify_skin_disease(
 
         predicted_class = SKIN_CLASSES[pred_index]
         
-        # Get product suggestions
+        # 5. RAG Product Suggestions
         product_suggestions = []
         if state.vectorstore:
             # Map disease to skin types
