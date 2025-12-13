@@ -389,7 +389,7 @@ def setup_rag_chain(db):
     # 1. LLM Configuration (giữ nguyên thông số production)
     print("\n🤖 [1/3] Đang kết nối với Google Gemini...")
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model="gemini-2.0-flash",
         temperature=0.05,
         max_output_tokens=1500,
         convert_system_message_to_human=True,
@@ -687,7 +687,7 @@ def analyze_skin_image(image_input, note: str = None):
         if img is None:
             raise ValueError("Invalid image input")
 
-        vision_model = genai.GenerativeModel('gemini-2.5-flash')
+        vision_model = genai.GenerativeModel('gemini-2.0-flash')
         
         vision_prompt = """Bạn là chuyên gia da liễu. Phân tích ảnh da và TÓM TẮT NGẮN GỌN:
 1. LOẠI DA: (khô/dầu/hỗn hợp/nhạy cảm/thường)

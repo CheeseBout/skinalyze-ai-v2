@@ -21,7 +21,7 @@ CSV_FILE = DATA_DIR / "cosmetics.csv"
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 # Gemini model
-GEMINI_TEXT_MODEL = "gemini-2.5-flash"
+GEMINI_TEXT_MODEL = "gemini-2.0-flash"
 GEMINI_VISION_MODEL = "gemini-2.5-flash"
 
 # =============================================================================
