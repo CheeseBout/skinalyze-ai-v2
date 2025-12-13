@@ -17,13 +17,15 @@ from PIL import Image
 import io
 import base64
 import numpy as np
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 import os
 import time
 import json
+import re
 from datetime import datetime
 import mediapipe as mp
 from dotenv import load_dotenv
+import google.generativeai as genai 
 
 load_dotenv()
 
@@ -37,17 +39,17 @@ from RAG_cosmetic import (
     build_image_analysis_query,
     detect_skin_condition_and_types,
     get_product_suggestions_by_skin_types,
-    map_disease_to_skin_types
+    map_disease_to_skin_types,
+    convert_price_in_text
 )
 
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-# ✅ UPDATED: 11 classes (khớp với training notebook)
 SKIN_CLASSES = [
     'Acne',
     'Actinic_Keratosis',
-    'Drug_Eruption',  # ← ✅ THÊM LẠI
+    'Drug_Eruption',
     'Eczema',
     'Normal',
     'Psoriasis',
@@ -87,11 +89,134 @@ class AppState:
 state = AppState()
 
 # =============================================================================
+# SMART FILTERING LOGIC (ENHANCED PERSONALIZATION)
+# =============================================================================
+async def smart_product_filtering(
+    db, 
+    disease_class: str, 
+    skin_types: List[str], 
+    age: Optional[int], 
+    gender: Optional[str], 
+    allergies: Optional[str]
+) -> List[Dict[str, str]]:
+    """
+    ASYNC Version: Lọc sản phẩm dùng Gemini với Prompt chú trọng toàn diện:
+    Disease + Skin Type + Age + Gender + Allergies.
+    """
+    try:
+        print(f"\n🧠 Starting Smart Product Filtering for {disease_class}...")
+        
+        # 1. Broad Search (Tìm kiếm rộng ~25 sản phẩm)
+        search_terms = [disease_class] + skin_types
+        # Thêm từ khóa ingredients để đảm bảo có thông tin thành phần cho việc lọc
+        query = f"sản phẩm điều trị chăm sóc da {disease_class} {' '.join(skin_types)} ingredients"
+        
+        docs = db.similarity_search(query, k=25)
+        
+        # 2. Group & Deduplicate
+        candidates = {}
+        for doc in docs:
+            name = doc.metadata.get('product_name')
+            if not name:
+                match = re.search(r'Product Name:\s*(.+?)(?:\n|$)', doc.page_content, re.IGNORECASE)
+                if match:
+                    name = match.group(1).strip()
+            
+            if name and name not in candidates:
+                # Cắt ngắn content nhưng giữ đủ thông tin quan trọng
+                candidates[name] = doc.page_content[:500]
+        
+        if not candidates:
+            return []
+
+        print(f"   🔍 Found {len(candidates)} candidate products. Asking Gemini (Async)...")
+
+        # 3. Construct Prompt with Holistic Reasoning
+        candidate_list_text = ""
+        for i, (name, content) in enumerate(candidates.items()):
+            candidate_list_text += f"ID_{i}: {name}\nThông tin: {content}\n---\n"
+
+        # Xử lý thông tin hiển thị
+        display_age = f"{age} tuổi" if age else "độ tuổi trưởng thành"
+        display_gender = gender if gender else "mọi giới tính"
+        display_allergies = allergies if allergies and allergies.lower() not in ["none", "null", ""] else "Không có"
+        
+        prompt = f"""
+        Bạn là chuyên gia da liễu cá nhân hóa cao cấp. Hãy chọn ĐÚNG 5 sản phẩm tốt nhất từ danh sách bên dưới.
+
+        HỒ SƠ BỆNH NHÂN (RẤT QUAN TRỌNG):
+        - 🛑 DỊ ỨNG: {display_allergies} (Bắt buộc loại bỏ sản phẩm chứa thành phần này).
+        - 🏥 Bệnh lý chẩn đoán: {disease_class}.
+        - 🧬 Loại da: {', '.join(skin_types)}.
+        - 👤 Thông tin cá nhân: {display_gender}, {display_age}.
+
+        DANH SÁCH ỨNG VIÊN:
+        {candidate_list_text}
+
+        YÊU CẦU LỌC VÀ VIẾT LÝ DO:
+        1. An toàn là trên hết: Loại bỏ ngay lập tức sản phẩm chứa chất gây dị ứng cho bệnh nhân.
+        2. Tính phù hợp: Ưu tiên sản phẩm điều trị hiệu quả {disease_class} và phù hợp với {display_gender} ở độ tuổi {display_age}.
+        3. ✍️ VIẾT LÝ DO (REASON): Hãy viết một câu giải thích ngắn gọn nhưng TỔNG HỢP được các yếu tố trên.
+           - Đừng chỉ nói về thành phần. Hãy kết nối nó với bệnh lý, tuổi và giới tính.
+           
+           Ví dụ TỐT: "Sản phẩm chứa Salicylic Acid giúp trị mụn (Acne) hiệu quả, kết cấu gel mỏng nhẹ phù hợp cho nam giới 20 tuổi da dầu, và đảm bảo không chứa hương liệu (tránh dị ứng)."
+           Ví dụ TỐT: "Kem dưỡng ẩm phục hồi hàng rào bảo vệ da, rất cần thiết cho bệnh Chàm (Eczema), thành phần lành tính an toàn cho nữ giới 30 tuổi và không chứa [Dị ứng]."
+
+        OUTPUT FORMAT (JSON ONLY):
+        [
+            {{ "product_name": "Tên sản phẩm chính xác", "reason": "Lý do tổng hợp như yêu cầu..." }},
+            ...
+        ]
+        """
+
+        # 4. Call Gemini ASYNC
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        response = await model.generate_content_async(prompt)
+        
+        # 5. Parse Result
+        result_text = response.text.strip()
+        
+        if "```" in result_text:
+            start = result_text.find("[")
+            end = result_text.rfind("]") + 1
+            if start != -1 and end != -1:
+                result_text = result_text[start:end]
+        
+        try:
+            suggested_products = json.loads(result_text)
+            
+            valid_results = []
+            if isinstance(suggested_products, list):
+                for item in suggested_products:
+                    if isinstance(item, dict) and "product_name" in item:
+                        reason = item.get("reason", f"Sản phẩm phù hợp điều trị {disease_class} cho {display_gender}, {display_age}.")
+                        valid_results.append({"product_name": item["product_name"], "reason": reason})
+                    
+                    elif isinstance(item, str):
+                        valid_results.append({"product_name": item, "reason": f"Gợi ý chuyên biệt cho {display_gender}, {display_age} bị {disease_class}."})
+                
+                print(f"   ✅ Gemini selected top {len(valid_results)} products with personalized reasons.")
+                return valid_results[:5]
+            else:
+                 print("   ⚠️ Gemini response format unexpected, falling back.")
+                 return [{"product_name": name, "reason": f"Phù hợp với {disease_class} và loại da của bạn."} for name in list(candidates.keys())[:5]]
+
+        except json.JSONDecodeError:
+            print(f"   ⚠️ JSON Parse Error. Fallback.")
+            return [{"product_name": name, "reason": f"Sản phẩm được gợi ý cho tình trạng {disease_class}."} for name in list(candidates.keys())[:5]]
+
+    except Exception as e:
+        print(f"   ❌ Error in smart filtering: {str(e)}")
+        # Fallback về logic cũ
+        basic_list = get_product_suggestions_by_skin_types(db, skin_types, num_products=5)
+        return [{"product_name": name, "reason": f"Đề xuất dựa trên loại da {', '.join(skin_types)}."} for name in basic_list]
+
+# =============================================================================
 # MODEL LOADING
 # =============================================================================
 def load_classification_model():
     """
-    ✅ FIXED: Load EfficientNet-B0 với architecture khớp training notebook
+    Load EfficientNet-B0 với architecture khớp training notebook
     Architecture: 1280 → [Dropout 0.4] → 512 → [BN + ReLU + Dropout 0.3] → 256 → [BN + ReLU] → 11
     """
     model_path = MODEL_PATHS['classification']
@@ -103,7 +228,7 @@ def load_classification_model():
         # Load checkpoint
         checkpoint = torch.load(model_path, map_location=device, weights_only=False)
         
-        # 1. If checkpoint is a full model object (unlikely)
+        # 1. If checkpoint is a full model object
         if not isinstance(checkpoint, dict):
             print("ℹ️  Checkpoint is a full model object.")
             model = checkpoint
@@ -114,33 +239,31 @@ def load_classification_model():
         # 2. Extract state_dict
         state_dict = checkpoint.get('model_state_dict', checkpoint)
         
-        # ✅ Get architecture config from checkpoint
+        # Get architecture config
         config = checkpoint.get('config', {})
-        dropout1 = config.get('dropout1', 0.4)  # Default from notebook
-        dropout2 = config.get('dropout2', 0.3)  # Default from notebook
+        dropout1 = config.get('dropout1', 0.4)
+        dropout2 = config.get('dropout2', 0.3)
         num_classes = checkpoint.get('num_classes', len(SKIN_CLASSES))
         
         print(f"ℹ️  Loading model with config:")
         print(f"   - Num classes: {num_classes}")
-        print(f"   - Dropout 1: {dropout1}")
-        print(f"   - Dropout 2: {dropout2}")
         
         # Initialize EfficientNet-B0 base
         model = models.efficientnet_b0(weights=None)
         
-        # ✅ Reconstruct EXACT classifier from training notebook
-        num_features = 1280  # EfficientNet-B0 default
+        # Reconstruct EXACT classifier
+        num_features = 1280
         
         model.classifier = nn.Sequential(
-            nn.Dropout(p=dropout1),              # Layer 0: Dropout 0.4
-            nn.Linear(num_features, 512),         # Layer 1: 1280 → 512
-            nn.BatchNorm1d(512),                  # Layer 2: BatchNorm
-            nn.ReLU(),                            # Layer 3: ReLU
-            nn.Dropout(p=dropout2),              # Layer 4: Dropout 0.3
-            nn.Linear(512, 256),                  # Layer 5: 512 → 256
-            nn.BatchNorm1d(256),                  # Layer 6: BatchNorm
-            nn.ReLU(),                            # Layer 7: ReLU
-            nn.Linear(256, num_classes)          # Layer 8: 256 → 11
+            nn.Dropout(p=dropout1),
+            nn.Linear(num_features, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
+            nn.Dropout(p=dropout2),
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Linear(256, num_classes)
         )
         
         # Load trained weights
@@ -149,7 +272,6 @@ def load_classification_model():
         model.eval()
         
         print(f"✅ Classification model loaded successfully")
-        print(f"   Architecture: 1280 → 512 → 256 → {num_classes}")
         
         return model
         
@@ -160,7 +282,7 @@ def load_classification_model():
         return None
 
 def load_segmentation_model():
-    """Load SAM2 segmentation model (Fixed Relative Path for Hydra)"""
+    """Load SAM2 segmentation model"""
     model_path = MODEL_PATHS['segmentation']
     if not os.path.exists(model_path):
         print(f"⚠️  Segmentation model not found")
@@ -170,9 +292,7 @@ def load_segmentation_model():
         from sam2.build_sam import build_sam2
         from sam2.sam2_image_predictor import SAM2ImagePredictor
         
-        # Load checkpoint
         checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-        
         config_file = "configs/sam2.1/sam2.1_hiera_t.yaml"
         print(f"ℹ️ Loading SAM2 with config: {config_file}")
 
@@ -248,7 +368,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AI Dermatology & Cosmetic Consultant API",
     description="Stateless API for skin disease classification, segmentation, and cosmetic consultation",
-    version="3.6.0",
+    version="3.7.3",
     lifespan=lifespan
 )
 
@@ -320,9 +440,6 @@ async def chat_endpoint(
     conversation_history: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None)
 ):
-    """
-    Stateless chat endpoint supporting Text + Optional Image (VLM) + Intelligent Product Recommendations.
-    """
     if state.rag_chain is None:
         raise HTTPException(status_code=503, detail="RAG chain not initialized")
     
@@ -475,12 +592,14 @@ async def analyze_image_base64_endpoint(request: ImageAnalysisRequest):
 @app.post("/api/classification-disease")
 async def classify_skin_disease(
     file: UploadFile = File(...),
-    notes: Optional[str] = Form(None)
+    notes: Optional[str] = Form(None),
+    age: Optional[int] = Form(None),       
+    gender: Optional[str] = Form(None),    
+    allergies: Optional[str] = Form(None) 
 ) -> Dict:
     """
-    Classify skin disease using EfficientNet.
-    Checks for face visibility ONLY if notes == 'facial'.
-    Returns product suggestions based on detected disease.
+    Classify skin disease, then filter products via Gemini based on Age, Gender, Allergies.
+    Returns Dictionary containing classification results and a list of product objects with reasons.
     """
     if state.classification_model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
@@ -499,10 +618,10 @@ async def classify_skin_disease(
                 results = state.face_detector.process(image_np)
                 
                 if not results.detections:
-                     raise HTTPException(
-                         status_code=400, 
-                         detail="No face detected. Please upload a clear image of a face for facial analysis."
-                     )
+                      raise HTTPException(
+                          status_code=400, 
+                          detail="No face detected. Please upload a clear image of a face for facial analysis."
+                      )
             else:
                 print("⚠️ Face detector skipped (not loaded)")
 
@@ -526,24 +645,27 @@ async def classify_skin_disease(
 
         predicted_class = SKIN_CLASSES[pred_index]
         
-        # Get product suggestions
+        # Get product suggestions (Smart Filtering)
         product_suggestions = []
         if state.vectorstore:
             # Map disease to skin types
             suitable_skin_types = map_disease_to_skin_types(predicted_class)
             
-            # Get product suggestions
-            product_suggestions = get_product_suggestions_by_skin_types(
-                state.vectorstore, 
+            # ✅ CALL SMART FILTERING with Gemini (Async)
+            product_suggestions = await smart_product_filtering(
+                state.vectorstore,
+                predicted_class,
                 suitable_skin_types,
-                num_products=5
+                age,
+                gender,
+                allergies
             )
 
         return {
             "predicted_class": predicted_class,
             "confidence": float(confidence.item()),
             "all_predictions": {SKIN_CLASSES[i]: float(all_probs[i]) for i in range(min(len(SKIN_CLASSES), len(all_probs)))},
-            "product_suggestions": product_suggestions
+            "product_suggestions": product_suggestions # Returns List[Dict]
         }
     except HTTPException as he:
         raise he
@@ -612,10 +734,6 @@ async def segment_skin_lesion(file: UploadFile = File(...)) -> Dict:
 # =============================================================================
 @app.post("/api/face-detection")
 async def face_detection(file: UploadFile = File(...)) -> Dict[str, bool]:
-    """
-    Checks if the image contains a face.
-    Returns: {"has_face": boolean}
-    """
     if state.face_detector is None:
         print("⚠️  Face detection model not loaded")
         return {"has_face": True} 
