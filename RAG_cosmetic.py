@@ -193,9 +193,7 @@ def setup_api_key():
     if "GOOGLE_API_KEY" not in os.environ:
         print("\n🔑 Cần Google API Key để sử dụng Gemini")
         print("💡 Lấy key miễn phí tại: https://makersuite.google.com/app/apikey\n")
-        # Sử dụng key hardcode từ file mới (Lưu ý: nên dùng biến môi trường cho bảo mật)
-        api_key = "AIzaSyAWT73LWyADZZc4RIJgghYblxXr0qqw0Ys" 
-        os.environ["GOOGLE_API_KEY"] = api_key
+        load_dotenv()
         print("✅ Đã thiết lập API Key!\n")
     else:
         print("✅ API Key đã được cấu hình sẵn!\n")
