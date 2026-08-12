@@ -2,9 +2,14 @@
 AI Dermatology & Cosmetic Consultant API
 Stateless API for NestJS Backend Integration
 
-v4.0.0: Migrated LLM + VLM from Google Gemini to OpenAI GPT-4o-mini
+v4.0.0: Migrated LLM from Google Gemini to OpenAI GPT-4o-mini
 (Gemini 2.0 Flash was fully retired by Google on 2026-06-01, which caused
 production 500 errors on /analyze-image before this migration).
+
+v4.1.0: HYBRID — VLM (image analysis) reverted to Google Gemini
+(gemini-3.5-flash). OpenAI vision refused to analyze real face photos
+regardless of prompt framing (content policy, not a bug). LLM chat stays
+on OpenAI GPT-4o-mini. Requires BOTH OPENAI_API_KEY and GOOGLE_API_KEY.
 """
 
 # =============================================================================
@@ -45,7 +50,7 @@ from RAG_cosmetic import (
     test_llm_connection,
     test_vlm_connection,
     OPENAI_LLM_MODEL,
-    OPENAI_VLM_MODEL,
+    GEMINI_VLM_MODEL,
 )
 
 # =============================================================================
@@ -100,7 +105,7 @@ class AppState:
     # --- VLM (image analysis) status ---
     vlm_ready: bool = False
     vlm_error: Optional[str] = None
-    vlm_model: str = OPENAI_VLM_MODEL
+    vlm_model: str = GEMINI_VLM_MODEL
 
 state = AppState()
 
