@@ -9,16 +9,6 @@ Merged Features:
 - Improved chunk_size and format_docs logic
 - Enhanced error handling from standalone
 - Comprehensive prompt template
-
-v4.0.0: LLM + VLM đã chuyển từ Google Gemini sang OpenAI GPT-4o-mini
-(Gemini 2.0 Flash bị Google khai tử ngày 2026-06-01, gây lỗi 500 production).
-
-v4.1.0: HYBRID — LLM (RAG chat) tiếp tục dùng OpenAI GPT-4o-mini, nhưng
-VLM (phân tích ảnh da) quay lại Google Gemini. Lý do: OpenAI vision từ
-chối phân tích ảnh khuôn mặt người thật (facial/biometric attribute
-policy) bất kể cách diễn đạt prompt — đã thử 2 phiên bản prompt khác
-nhau, refusal vẫn xảy ra ổn định. Gemini xử lý use case selfie da mặt
-tiêu dùng thoáng hơn nên phù hợp riêng cho VLM.
 """
 
 import os
@@ -873,6 +863,63 @@ def check_severity(analysis: str) -> bool:
     if not analysis:
         return False
     return any(keyword in analysis.upper() for keyword in ['RẤT NẶNG', 'RẤT NGHIÊM TRỌNG'])
+
+# =============================================================================
+# CLASSIFICATION-BASED ANALYSIS QUERY (thay thế VLM cho /analyze-image)
+# =============================================================================
+# v4.2.0: OpenAI (2 lần) và Gemini (1 lần) đều tự từ chối mô tả ảnh khuôn mặt
+# người thật dù đổi prompt nhiều cách — refusal xảy ra ở tầng model, không
+# phải bug hay safety filter có thể nới lỏng. /analyze-image và
+# /analyze-image-base64 chuyển sang dùng classifier EfficientNet-B0 tự host
+# (đã có sẵn, không gọi API bên ngoài, không có rủi ro bị từ chối) để xác
+# định tình trạng da, chỉ dùng LLM cho bước tư vấn sản phẩm bằng văn bản.
+DISEASE_CLASS_TO_VIETNAMESE = {
+    'Acne': 'Mụn (Acne)',
+    'Actinic_Keratosis': 'Dày sừng ánh sáng (Actinic Keratosis)',
+    'Drug_Eruption': 'Phát ban do thuốc (Drug Eruption)',
+    'Eczema': 'Chàm (Eczema)',
+    'Normal': 'Da bình thường (Normal)',
+    'Psoriasis': 'Vảy nến (Psoriasis)',
+    'Rosacea': 'Trứng cá đỏ (Rosacea)',
+    'Seborrh_Keratoses': 'Viêm da tiết bã (Seborrheic Keratoses)',
+    'Sun_Sunlight_Damage': 'Tổn thương do nắng (Sun Damage)',
+    'Tinea': 'Nấm da (Tinea)',
+    'Warts': 'Mụn cóc (Warts)',
+}
+
+def build_classification_analysis_query(predicted_class: str, confidence: float, additional_text: str = None):
+    """
+    Build (1) chuỗi mô tả hiển thị cho user và (2) câu query gửi RAG chain,
+    dựa trên kết quả classifier tự host thay vì text tự do từ VLM.
+
+    Lưu ý: KHÔNG tự suy ra mức độ nghiêm trọng (NHẸ/TRUNG BÌNH/NẶNG/RẤT NẶNG)
+    theo từng loại bệnh — đó là phán đoán y khoa nằm ngoài phạm vi model này.
+    Chỉ dùng độ tin cậy (confidence) của chính model làm tín hiệu khách quan:
+    confidence thấp → khuyến nghị xác nhận lại với bác sĩ, không phải vì bệnh
+    đó "nặng" mà vì kết quả nhận diện chưa chắc chắn.
+
+    Returns: (display_text, rag_query)
+    """
+    vn_name = DISEASE_CLASS_TO_VIETNAMESE.get(predicted_class, predicted_class)
+    confidence_pct = confidence * 100
+    display_text = f"Tình trạng da nhận diện được: {vn_name} (độ tin cậy {confidence_pct:.0f}%)"
+
+    user_req = f"\nYêu cầu thêm của người dùng: {additional_text}" if additional_text else ""
+
+    if predicted_class == 'Normal':
+        rag_query = f"""Kết quả phân tích ảnh: da không phát hiện vấn đề đặc biệt (độ tin cậy {confidence_pct:.0f}%).
+{user_req}
+
+Gợi ý 2-3 sản phẩm chăm sóc da hàng ngày để duy trì làn da khỏe mạnh."""
+    else:
+        rag_query = f"""Kết quả nhận diện tình trạng da (từ hệ thống phân loại ảnh AI):
+Tình trạng: {vn_name}
+Độ tin cậy: {confidence_pct:.0f}%
+{user_req}
+
+Tư vấn 2-3 sản phẩm CỤ THỂ phù hợp với tình trạng da này."""
+
+    return display_text, rag_query
 
 # =============================================================================
 # PRODUCT SUGGESTION HELPERS
