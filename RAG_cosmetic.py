@@ -10,7 +10,15 @@ Merged Features:
 - Enhanced error handling from standalone
 - Comprehensive prompt template
 
-v4.0.0: LLM + VLM đã chuyển từ Google Gemini sang OpenAI GPT-4o-mini.
+v4.0.0: LLM + VLM đã chuyển từ Google Gemini sang OpenAI GPT-4o-mini
+(Gemini 2.0 Flash bị Google khai tử ngày 2026-06-01, gây lỗi 500 production).
+
+v4.1.0: HYBRID — LLM (RAG chat) tiếp tục dùng OpenAI GPT-4o-mini, nhưng
+VLM (phân tích ảnh da) quay lại Google Gemini. Lý do: OpenAI vision từ
+chối phân tích ảnh khuôn mặt người thật (facial/biometric attribute
+policy) bất kể cách diễn đạt prompt — đã thử 2 phiên bản prompt khác
+nhau, refusal vẫn xảy ra ổn định. Gemini xử lý use case selfie da mặt
+tiêu dùng thoáng hơn nên phù hợp riêng cho VLM.
 """
 
 import os
@@ -20,6 +28,7 @@ from typing import Optional
 import torch
 from PIL import Image
 from openai import OpenAI
+import google.generativeai as genai
 import base64
 import io
 import time
@@ -39,9 +48,10 @@ CHUNKS_FILE = PATH / "data" / "product_chunks.txt"
 PERSIST_DIRECTORY = PATH / "db_chroma"
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
-# --- OpenAI models (LLM + VLM đều dùng GPT-4o-mini, gộp về 1 provider) ---
+# --- LLM (RAG chat) dùng OpenAI ---
 OPENAI_LLM_MODEL = "gpt-4o-mini"
-OPENAI_VLM_MODEL = "gpt-4o-mini"
+# --- VLM (phân tích ảnh da) dùng Gemini — xem ghi chú v4.1.0 ở đầu file ---
+GEMINI_VLM_MODEL = "gemini-3.5-flash"
 
 # Tỷ giá USD → VND (cố định)
 USD_TO_VND = 26349
@@ -127,23 +137,31 @@ SUPPORTED_SKIN_CONDITIONS = [
 # HELPER FUNCTIONS
 # =============================================================================
 def setup_api_key():
-    """Setup OpenAI API Key"""
+    """
+    Setup API key cho cả 2 provider: OpenAI (LLM/RAG chat) và Google (VLM).
+    KHÔNG raise ngay khi chỉ thiếu 1 trong 2 key — LLM và VLM là 2 tính năng
+    độc lập (state.llm_ready / state.vlm_ready tách biệt ở main.py), thiếu
+    1 bên không nên chặn bên còn lại hoạt động. Chỉ raise khi thiếu CẢ HAI.
+    """
     global _openai_client
-    api_key = os.getenv("OPENAI_API_KEY")
+    openai_key = os.getenv("OPENAI_API_KEY")
+    google_key = os.getenv("GOOGLE_API_KEY")
 
-    if not api_key:
-        print("\n❌ CRITICAL ERROR: OPENAI_API_KEY not found in environment variables.")
-        print("Please create a .env file and add OPENAI_API_KEY=your_new_key")
-        raise ValueError("OPENAI_API_KEY is missing.")
+    if not openai_key and not google_key:
+        print("\n❌ CRITICAL ERROR: Thiếu cả OPENAI_API_KEY và GOOGLE_API_KEY.")
+        raise ValueError("OPENAI_API_KEY và GOOGLE_API_KEY đều đang thiếu.")
 
-    _openai_client = OpenAI(api_key=api_key)
-    print("✅ OpenAI API Key configured successfully from environment!\n")
+    if openai_key:
+        _openai_client = OpenAI(api_key=openai_key)
+        print("✅ OpenAI API Key configured (dùng cho RAG chat)!\n")
+    else:
+        print("\n⚠️  OPENAI_API_KEY không có — RAG chat (LLM) sẽ không hoạt động.")
 
-def _pil_image_to_base64_jpeg(img: Image.Image) -> str:
-    """Convert PIL Image sang base64 JPEG string (dùng cho OpenAI vision API)."""
-    buffered = io.BytesIO()
-    img.convert("RGB").save(buffered, format="JPEG", quality=90)
-    return base64.b64encode(buffered.getvalue()).decode("utf-8")
+    if google_key:
+        genai.configure(api_key=google_key)
+        print("✅ Google API Key configured (dùng cho phân tích ảnh da)!\n")
+    else:
+        print("\n⚠️  GOOGLE_API_KEY không có — phân tích ảnh (VLM) sẽ không hoạt động.")
 
 def extract_product_name(chunk_text):
     """Trích xuất tên sản phẩm từ chunk text"""
@@ -754,22 +772,9 @@ Trả lời NGẮN GỌN, khách quan, bằng tiếng Việt, chỉ tập trung 
         if note:
             vision_prompt += f"\n\nGhi chú thêm từ người dùng: {note}"
 
-        img_b64 = _pil_image_to_base64_jpeg(img)
-
-        client = get_openai_client()
-        response = client.chat.completions.create(
-            model=OPENAI_VLM_MODEL,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": vision_prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
-                ]
-            }],
-            max_tokens=600,
-            temperature=0.2,
-        )
-        analysis = response.choices[0].message.content
+        vision_model = genai.GenerativeModel(GEMINI_VLM_MODEL)
+        response = vision_model.generate_content([vision_prompt, img])
+        analysis = response.text
         print("✅ Analysis complete!")
         return analysis
 
@@ -798,24 +803,13 @@ def test_llm_connection():
 
 def test_vlm_connection():
     """
-    Gọi thử 1 request ảnh 1x1px tới VLM (gpt-4o-mini vision) để xác nhận
-    model/API key còn hoạt động. KHÔNG tự bắt exception.
+    Gọi thử 1 request ảnh nhỏ tới VLM (Gemini) để xác nhận model/API key
+    còn hoạt động. KHÔNG tự bắt exception — để caller (main.py lifespan)
+    quyết định cách xử lý và lưu lỗi vào state.
     """
-    tiny_img = Image.new("RGB", (1, 1), color="white")
-    img_b64 = _pil_image_to_base64_jpeg(tiny_img)
-
-    client = get_openai_client()
-    client.chat.completions.create(
-        model=OPENAI_VLM_MODEL,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "ping"},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
-            ]
-        }],
-        max_tokens=5,
-    )
+    tiny_img = Image.new("RGB", (16, 16), color="white")
+    vision_model = genai.GenerativeModel(GEMINI_VLM_MODEL)
+    vision_model.generate_content(["ping", tiny_img])
 
 # =============================================================================
 # HELPER FUNCTIONS FOR NESTJS INTEGRATION
