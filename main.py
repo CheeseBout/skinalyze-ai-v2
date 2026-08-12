@@ -1,15 +1,6 @@
 """
 AI Dermatology & Cosmetic Consultant API
 Stateless API for NestJS Backend Integration
-
-v4.0.0: Migrated LLM from Google Gemini to OpenAI GPT-4o-mini
-(Gemini 2.0 Flash was fully retired by Google on 2026-06-01, which caused
-production 500 errors on /analyze-image before this migration).
-
-v4.1.0: HYBRID — VLM (image analysis) reverted to Google Gemini
-(gemini-3.5-flash). OpenAI vision refused to analyze real face photos
-regardless of prompt framing (content policy, not a bug). LLM chat stays
-on OpenAI GPT-4o-mini. Requires BOTH OPENAI_API_KEY and GOOGLE_API_KEY.
 """
 
 # =============================================================================
@@ -42,8 +33,7 @@ from RAG_cosmetic import (
     load_or_create_vectorstore,
     setup_rag_chain,
     analyze_skin_image,
-    check_severity,
-    build_image_analysis_query,
+    build_classification_analysis_query,
     detect_skin_condition_and_types,
     get_product_suggestions_by_skin_types,
     map_disease_to_skin_types,
@@ -499,28 +489,48 @@ async def analyze_image_endpoint(
     image: UploadFile = File(...),
     additional_text: Optional[str] = Form(None)
 ):
+    """
+    v4.2.0: Dùng classifier EfficientNet-B0 tự host thay vì VLM bên thứ 3
+    để xác định tình trạng da (OpenAI + Gemini đều từ chối phân tích ảnh
+    khuôn mặt người thật ở tầng model, không thể fix bằng đổi prompt).
+    LLM chỉ còn dùng cho bước tư vấn sản phẩm bằng văn bản.
+    """
     if state.rag_chain is None:
         raise HTTPException(status_code=503, detail="RAG chain not initialized")
-    if not state.vlm_ready:
-        raise HTTPException(status_code=503, detail=f"VLM chưa sẵn sàng: {state.vlm_error}")
+    if state.classification_model is None:
+        raise HTTPException(status_code=503, detail="Classification model not loaded")
 
     try:
         start_time = time.time()
-        image_bytes = await image.read()
+        contents = await image.read()
+        pil_image = Image.open(io.BytesIO(contents)).convert("RGB")
 
-        skin_analysis = analyze_skin_image(image_bytes)
-        if not skin_analysis:
+        input_tensor = IMAGE_TRANSFORMS['classification'](pil_image).unsqueeze(0).to(device)
+        with torch.no_grad():
+            outputs = state.classification_model(input_tensor)
+            probabilities = torch.nn.functional.softmax(outputs, dim=1)
+            confidence, predicted = torch.max(probabilities, 1)
+
+        pred_index = predicted.item()
+        if pred_index >= len(SKIN_CLASSES):
             raise HTTPException(status_code=400, detail="Cannot analyze image")
 
-        is_severe = check_severity(skin_analysis)
-        rag_query = build_image_analysis_query(skin_analysis, additional_text)
+        predicted_class = SKIN_CLASSES[pred_index]
+        confidence_score = float(confidence.item())
+        is_low_confidence = confidence_score < 0.5
 
+        skin_analysis, rag_query = build_classification_analysis_query(
+            predicted_class, confidence_score, additional_text
+        )
         product_recommendation = state.rag_chain.invoke(rag_query)
 
         return ImageAnalysisResponse(
             skin_analysis=skin_analysis,
             product_recommendation=product_recommendation,
-            severity_warning="⚠️ SEVERE: Please consult a dermatologist immediately!" if is_severe else None,
+            severity_warning=(
+                "⚠️ Độ tin cậy nhận diện thấp — kết quả chỉ mang tính tham khảo, "
+                "nên tham khảo thêm ý kiến bác sĩ da liễu để xác nhận."
+            ) if is_low_confidence else None,
             response_time=round(time.time() - start_time, 2),
             timestamp=datetime.now().isoformat()
         )
@@ -532,25 +542,49 @@ async def analyze_image_endpoint(
 
 @app.post("/analyze-image-base64", response_model=ImageAnalysisResponse)
 async def analyze_image_base64_endpoint(request: ImageAnalysisRequest):
+    """
+    v4.2.0: Dùng classifier EfficientNet-B0 tự host — xem ghi chú ở
+    /analyze-image phía trên.
+    """
     if state.rag_chain is None:
         raise HTTPException(status_code=503, detail="RAG chain not initialized")
-    if not state.vlm_ready:
-        raise HTTPException(status_code=503, detail=f"VLM chưa sẵn sàng: {state.vlm_error}")
+    if state.classification_model is None:
+        raise HTTPException(status_code=503, detail="Classification model not loaded")
 
     try:
         start_time = time.time()
-        skin_analysis = analyze_skin_image(request.image_base64)
-        if not skin_analysis:
+        image_data = request.image_base64
+        if image_data.startswith('data:image'):
+            image_data = image_data.split(',')[1]
+        image_bytes = base64.b64decode(image_data)
+        pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
+        input_tensor = IMAGE_TRANSFORMS['classification'](pil_image).unsqueeze(0).to(device)
+        with torch.no_grad():
+            outputs = state.classification_model(input_tensor)
+            probabilities = torch.nn.functional.softmax(outputs, dim=1)
+            confidence, predicted = torch.max(probabilities, 1)
+
+        pred_index = predicted.item()
+        if pred_index >= len(SKIN_CLASSES):
             raise HTTPException(status_code=400, detail="Cannot analyze image")
 
-        is_severe = check_severity(skin_analysis)
-        rag_query = build_image_analysis_query(skin_analysis, request.additional_text)
+        predicted_class = SKIN_CLASSES[pred_index]
+        confidence_score = float(confidence.item())
+        is_low_confidence = confidence_score < 0.5
+
+        skin_analysis, rag_query = build_classification_analysis_query(
+            predicted_class, confidence_score, request.additional_text
+        )
         product_recommendation = state.rag_chain.invoke(rag_query)
 
         return ImageAnalysisResponse(
             skin_analysis=skin_analysis,
             product_recommendation=product_recommendation,
-            severity_warning="⚠️ SEVERE: Please consult a dermatologist!" if is_severe else None,
+            severity_warning=(
+                "⚠️ Độ tin cậy nhận diện thấp — kết quả chỉ mang tính tham khảo, "
+                "nên tham khảo thêm ý kiến bác sĩ da liễu để xác nhận."
+            ) if is_low_confidence else None,
             response_time=round(time.time() - start_time, 2),
             timestamp=datetime.now().isoformat()
         )
