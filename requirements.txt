@@ -6,10 +6,10 @@ python-dotenv
 # --- AI Core ---
 langchain==0.1.16
 langchain-community==0.0.33
-langchain-google-genai==0.0.11
+langchain-openai>=0.1.0
 langchain-chroma==0.1.0
 langchain-core<0.2.0
-google-generativeai==0.4.1
+openai>=1.30.0
 chromadb==0.4.22
 
 # --- Vector Store Dependencies (FIX LỖI 1) ---
