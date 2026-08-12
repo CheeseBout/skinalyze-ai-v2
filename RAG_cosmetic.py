@@ -11,9 +11,6 @@ Merged Features:
 - Comprehensive prompt template
 
 v4.0.0: LLM + VLM đã chuyển từ Google Gemini sang OpenAI GPT-4o-mini.
-Lý do: Gemini 2.0 Flash bị Google khai tử hoàn toàn ngày 2026-06-01,
-gây lỗi 500 trên production. Gộp về 1 provider (OpenAI) cho cả RAG chat
-lẫn phân tích ảnh da để giảm phụ thuộc và đơn giản hóa vận hành.
 """
 
 import os
@@ -733,26 +730,26 @@ def analyze_skin_image(image_input, note: str = None):
         if img is None:
             raise ValueError("Invalid image input")
 
-        vision_prompt = """Bạn là chuyên gia da liễu. Phân tích ảnh da và TÓM TẮT NGẮN GỌN:
+        vision_prompt = """Bạn là trợ lý tư vấn mỹ phẩm. Nhiệm vụ của bạn là MÔ TẢ khách quan các đặc điểm bề mặt da nhìn thấy trong ảnh — phục vụ mục đích gợi ý sản phẩm chăm sóc da hàng ngày. Đây KHÔNG phải là chẩn đoán y tế hay đánh giá bệnh lý, chỉ là quan sát bề mặt da mang tính thẩm mỹ/chăm sóc da.
 
-1. LOẠI DA: (khô/dầu/hỗn hợp/nhạy cảm/thường)
+Hãy mô tả NGẮN GỌN theo các mục sau:
 
-2. VẤN ĐỀ CHÍNH & MỨC ĐỘ NGHIÊM TRỌNG:
-- Nếu có mụn: loại mụn (viêm/đầu đen/đầu trắng/bọc), mức độ (NHẸ/TRUNG BÌNH/NẶNG/RẤT NẶNG)
-- Nếu có thâm/sẹo: mức độ (NHẸ/TRUNG BÌNH/NẶNG/RẤT NẶNG), màu sắc, phân bố
-- Nếu có lão hóa: mức độ (NHẸ/TRUNG BÌNH/NẶNG)
-- Nếu có vấn đề khác: nêu rõ
+1. LOẠI DA QUAN SÁT ĐƯỢC: (khô/dầu/hỗn hợp/nhạy cảm/thường) — dựa trên độ bóng và kết cấu bề mặt
 
-3. MỨC ĐỘ CHUNG: Chọn 1 trong 4 (QUAN TRỌNG):
-   - NHẸ: Vấn đề nhỏ, ít nốt, có thể tự chăm sóc
-   - TRUNG BÌNH: Vấn đề rõ ràng, nhiều nốt, cần sản phẩm chuyên dụng
-   - NẶNG: Vấn đề lan rộng, viêm nhiều, cần điều trị tích cực
-   - RẤT NẶNG: Viêm trầm trọng, sẹo nhiều, CẦN GẶP BÁC SĨ
+2. ĐẶC ĐIỂM BỀ MẶT DA QUAN SÁT ĐƯỢC:
+- Các đốm/nốt trên da (nếu có): kích thước, mật độ, phân bố chung chung
+- Vùng da không đều màu, khô ráp, hoặc bóng dầu (nếu có)
+- Dấu hiệu lão hóa bề mặt (nếu có): nếp nhăn, độ đàn hồi
 
-4. GỢI Ý: (1 câu ngắn)
+3. MỨC ĐỘ ƯU TIÊN CHĂM SÓC: Chọn 1 trong 4, dựa trên mức độ rõ rệt của đặc điểm bề mặt quan sát được (KHÔNG phải đánh giá y tế, QUAN TRỌNG phải ghi rõ):
+   - NHẸ: Đặc điểm nhỏ, ít, có thể chăm sóc bằng sản phẩm cơ bản
+   - TRUNG BÌNH: Đặc điểm khá rõ, cần sản phẩm chuyên biệt hơn
+   - NẶNG: Đặc điểm lan rộng, cần sản phẩm chuyên sâu và chăm sóc kiên trì
+   - RẤT NẶNG: Đặc điểm nổi bật, lan rộng nhiều — bên cạnh sản phẩm chăm sóc, nên tham khảo thêm ý kiến chuyên gia da liễu
 
-QUAN TRỌNG: Phải ghi rõ MỨC ĐỘ.
-Trả lời NGẮN GỌN, bằng tiếng Việt."""
+4. GỢI Ý CHĂM SÓC: (1 câu ngắn, hướng loại sản phẩm phù hợp)
+
+Trả lời NGẮN GỌN, khách quan, bằng tiếng Việt, chỉ tập trung mô tả bề mặt da phục vụ tư vấn mỹ phẩm."""
 
         if note:
             vision_prompt += f"\n\nGhi chú thêm từ người dùng: {note}"
