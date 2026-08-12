@@ -1,6 +1,10 @@
 """
 AI Dermatology & Cosmetic Consultant API
 Stateless API for NestJS Backend Integration
+
+v4.0.0: Migrated LLM + VLM from Google Gemini to OpenAI GPT-4o-mini
+(Gemini 2.0 Flash was fully retired by Google on 2026-06-01, which caused
+production 500 errors on /analyze-image before this migration).
 """
 
 # =============================================================================
@@ -37,7 +41,11 @@ from RAG_cosmetic import (
     build_image_analysis_query,
     detect_skin_condition_and_types,
     get_product_suggestions_by_skin_types,
-    map_disease_to_skin_types
+    map_disease_to_skin_types,
+    test_llm_connection,
+    test_vlm_connection,
+    OPENAI_LLM_MODEL,
+    OPENAI_VLM_MODEL,
 )
 
 # =============================================================================
@@ -84,6 +92,16 @@ class AppState:
     face_detector = None
     vectorstore = None
 
+    # --- LLM (RAG chat) status ---
+    llm_ready: bool = False
+    llm_error: Optional[str] = None
+    llm_model: str = OPENAI_LLM_MODEL
+
+    # --- VLM (image analysis) status ---
+    vlm_ready: bool = False
+    vlm_error: Optional[str] = None
+    vlm_model: str = OPENAI_VLM_MODEL
+
 state = AppState()
 
 # =============================================================================
@@ -98,11 +116,11 @@ def load_classification_model():
     if not os.path.exists(model_path):
         print(f"⚠️  Classification model not found at {model_path}")
         return None
-    
+
     try:
         # Load checkpoint
         checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-        
+
         # 1. If checkpoint is a full model object (unlikely)
         if not isinstance(checkpoint, dict):
             print("ℹ️  Checkpoint is a full model object.")
@@ -113,24 +131,24 @@ def load_classification_model():
 
         # 2. Extract state_dict
         state_dict = checkpoint.get('model_state_dict', checkpoint)
-        
+
         # ✅ Get architecture config from checkpoint
         config = checkpoint.get('config', {})
         dropout1 = config.get('dropout1', 0.4)  # Default from notebook
         dropout2 = config.get('dropout2', 0.3)  # Default from notebook
         num_classes = checkpoint.get('num_classes', len(SKIN_CLASSES))
-        
+
         print(f"ℹ️  Loading model with config:")
         print(f"   - Num classes: {num_classes}")
         print(f"   - Dropout 1: {dropout1}")
         print(f"   - Dropout 2: {dropout2}")
-        
+
         # Initialize EfficientNet-B0 base
         model = models.efficientnet_b0(weights=None)
-        
+
         # ✅ Reconstruct EXACT classifier from training notebook
         num_features = 1280  # EfficientNet-B0 default
-        
+
         model.classifier = nn.Sequential(
             nn.Dropout(p=dropout1),              # Layer 0: Dropout 0.4
             nn.Linear(num_features, 512),         # Layer 1: 1280 → 512
@@ -142,17 +160,17 @@ def load_classification_model():
             nn.ReLU(),                            # Layer 7: ReLU
             nn.Linear(256, num_classes)          # Layer 8: 256 → 11
         )
-        
+
         # Load trained weights
         model.load_state_dict(state_dict, strict=False)
         model.to(device)
         model.eval()
-        
+
         print(f"✅ Classification model loaded successfully")
         print(f"   Architecture: 1280 → 512 → 256 → {num_classes}")
-        
+
         return model
-        
+
     except Exception as e:
         print(f"❌ Error loading classification model: {e}")
         import traceback
@@ -165,14 +183,14 @@ def load_segmentation_model():
     if not os.path.exists(model_path):
         print(f"⚠️  Segmentation model not found")
         return None
-    
+
     try:
         from sam2.build_sam import build_sam2
         from sam2.sam2_image_predictor import SAM2ImagePredictor
-        
+
         # Load checkpoint
         checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-        
+
         config_file = "configs/sam2.1/sam2.1_hiera_t.yaml"
         print(f"ℹ️ Loading SAM2 with config: {config_file}")
 
@@ -183,14 +201,14 @@ def load_segmentation_model():
             mode='eval',
             apply_postprocessing=False
         )
-        
+
         if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
             sam2_model.load_state_dict(checkpoint['model_state_dict'], strict=False)
-        
+
         predictor = SAM2ImagePredictor(sam2_model)
         print("✅ SAM2 segmentation model loaded")
         return predictor
-        
+
     except Exception as e:
         print(f"❌ Error loading segmentation model: {e}")
         return None
@@ -215,31 +233,66 @@ async def lifespan(app: FastAPI):
     print("\n" + "=" * 80)
     print("🚀 STARTING AI DERMATOLOGY & COSMETIC API SERVER")
     print("=" * 80)
-    
+
     state.classification_model = load_classification_model()
     state.segmentation_model = load_segmentation_model()
     state.face_detector = load_face_detection_model()
 
+    # --- 1. API Key setup ---
     try:
         setup_api_key()
-        db, embeddings = load_or_create_vectorstore()
-        
-        if db is None:
-            print("\n⚠️  Vector Store not initialized")
-        else:
+    except Exception as e:
+        state.llm_error = str(e)
+        state.vlm_error = str(e)
+        print(f"\n❌ API key setup failed: {e}\n")
+    else:
+        # --- 2. Vector store + RAG chain ---
+        try:
+            db, embeddings = load_or_create_vectorstore()
+            if db is None:
+                raise RuntimeError("Vector store not initialized")
             state.vectorstore = db
             state.rag_chain = setup_rag_chain(db)
-            print("\n✅ RAG Chatbot ready")
-        
-        print("\n✅ Server ready!")
-        print("📚 API Documentation: http://localhost:8000/docs")
-        print("=" * 80 + "\n")
-        
-    except Exception as e:
-        print(f"\n❌ Error initializing RAG: {e}\n")
-    
+            print("\n✅ RAG chain constructed")
+        except Exception as e:
+            state.llm_error = str(e)
+            print(f"\n❌ Error initializing RAG chain: {e}\n")
+
+        # --- 3. LLM self-test (chỉ chạy nếu rag_chain đã dựng xong) ---
+        # Constructing ChatOpenAI() KHÔNG gọi API thật, nên phải tự test
+        # 1 request nhỏ để phát hiện model bị đổi/khai tử hoặc sai API key
+        # ngay lúc khởi động, thay vì chờ user gặp lỗi 500 (như sự cố Gemini
+        # 2.0 Flash bị Google khai tử ngày 2026-06-01).
+        if state.rag_chain is not None:
+            try:
+                print(f"\n🧪 Testing LLM connection ({state.llm_model})...")
+                test_llm_connection()
+                state.llm_ready = True
+                state.llm_error = None
+                print("✅ LLM self-test passed — RAG Chatbot ready")
+            except Exception as e:
+                state.llm_ready = False
+                state.llm_error = str(e)
+                print(f"❌ LLM self-test failed: {e}")
+
+        # --- 4. VLM self-test (độc lập với RAG chain) ---
+        try:
+            print(f"\n🧪 Testing VLM connection ({state.vlm_model})...")
+            test_vlm_connection()
+            state.vlm_ready = True
+            state.vlm_error = None
+            print("✅ VLM self-test passed")
+        except Exception as e:
+            state.vlm_ready = False
+            state.vlm_error = str(e)
+            print(f"❌ VLM self-test failed: {e}")
+
+    print("\n✅ Server ready!")
+    print("📚 API Documentation: http://localhost:8000/docs")
+    print("=" * 80 + "\n")
+
     yield
-    
+
     print("Shutting down models...")
 
 # =============================================================================
@@ -248,7 +301,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AI Dermatology & Cosmetic Consultant API",
     description="Stateless API for skin disease classification, segmentation, and cosmetic consultation",
-    version="3.6.0",
+    version="4.0.0",
     lifespan=lifespan
 )
 
@@ -265,7 +318,7 @@ app.add_middleware(
 # =============================================================================
 class ChatRequest(BaseModel):
     question: str
-    conversation_history: Optional[List[Dict[str, str]]] = None 
+    conversation_history: Optional[List[Dict[str, str]]] = None
 
 class ChatResponse(BaseModel):
     answer: str
@@ -289,6 +342,12 @@ class HealthResponse(BaseModel):
     vectorstore_status: str
     classification_model_status: str
     segmentation_model_status: str
+    llm_status: str
+    llm_model: str
+    llm_error: Optional[str] = None
+    vlm_status: str
+    vlm_model: str
+    vlm_error: Optional[str] = None
     timestamp: str
 
 class VLMAnalysisResponse(BaseModel):
@@ -302,12 +361,24 @@ class VLMAnalysisResponse(BaseModel):
 @app.get("/", response_model=HealthResponse)
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
+    core_ready = (
+        state.llm_ready
+        and state.vlm_ready
+        and state.classification_model is not None
+        and state.segmentation_model is not None
+    )
     return HealthResponse(
-        status="healthy" if state.rag_chain else "degraded",
+        status="healthy" if core_ready else "degraded",
         message="AI Dermatology & Cosmetic API",
         vectorstore_status="ready" if state.rag_chain else "not_initialized",
         classification_model_status="loaded" if state.classification_model else "not_loaded",
         segmentation_model_status="loaded" if state.segmentation_model else "not_loaded",
+        llm_status="ready" if state.llm_ready else "error",
+        llm_model=state.llm_model,
+        llm_error=state.llm_error,
+        vlm_status="ready" if state.vlm_ready else "error",
+        vlm_model=state.vlm_model,
+        vlm_error=state.vlm_error,
         timestamp=datetime.now().isoformat()
     )
 
@@ -325,10 +396,10 @@ async def chat_endpoint(
     """
     if state.rag_chain is None:
         raise HTTPException(status_code=503, detail="RAG chain not initialized")
-    
+
     try:
         start_time = time.time()
-        
+
         # 1. Parse conversation history
         history_list = []
         if conversation_history:
@@ -341,12 +412,15 @@ async def chat_endpoint(
         # 2. VLM Analysis (If image is provided)
         vlm_context_str = ""
         if image:
+            if not state.vlm_ready:
+                raise HTTPException(status_code=503, detail=f"VLM chưa sẵn sàng: {state.vlm_error}")
+
             if not image.content_type.startswith("image/"):
                 raise HTTPException(status_code=400, detail="Uploaded file is not an image")
-            
+
             image_bytes = await image.read()
             skin_analysis = analyze_skin_image(image_bytes, note=question)
-            
+
             if skin_analysis:
                 vlm_context_str = f"""
 \n[THÔNG TIN TỪ ẢNH NGƯỜI DÙNG GỬI KÈM]:
@@ -354,10 +428,10 @@ Hệ thống đã phân tích ảnh da của người dùng với kết quả sa
 {skin_analysis}
 -----------------------------------
 """
-        
+
         # 3. Intelligent Product Recommendation Logic
         detected_condition, suitable_skin_types = detect_skin_condition_and_types(question)
-        
+
         condition_context_str = ""
         if detected_condition:
             skin_types_str = ", ".join(suitable_skin_types) if suitable_skin_types else "mọi loại da"
@@ -382,11 +456,11 @@ Hệ thống đã phân tích ảnh da của người dùng với kết quả sa
                             user_msg.get('content', ''),
                             ai_msg.get('content', '')
                         ))
-            
+
             if context_pairs:
                 recent = context_pairs[-3:]
                 context_str = "LỊCH SỬ HỘI THOẠI TRƯỚC ĐÓ:\n" + "\n".join([
-                    f"User: {ctx[0]}\nAI: {ctx[1][:200]}..." 
+                    f"User: {ctx[0]}\nAI: {ctx[1][:200]}..."
                     for ctx in recent
                 ]) + "\n"
 
@@ -397,18 +471,20 @@ Hệ thống đã phân tích ảnh da của người dùng với kết quả sa
 
 CÂU HỎI HIỆN TẠI CỦA NGƯỜI DÙNG: {question}
 
-Yêu cầu: Hãy trả lời câu hỏi của người dùng dựa trên thông tin sản phẩm có trong database. 
+Yêu cầu: Hãy trả lời câu hỏi của người dùng dựa trên thông tin sản phẩm có trong database.
 Nếu có thông tin từ ảnh hoặc vấn đề da được phát hiện, hãy sử dụng nó để lọc và tư vấn sản phẩm chính xác hơn."""
-        
+
         # 6. Invoke RAG Chain
         response = state.rag_chain.invoke(full_query)
-        
+
         return ChatResponse(
             answer=response,
             response_time=round(time.time() - start_time, 2),
             timestamp=datetime.now().isoformat()
         )
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Chat Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
@@ -420,20 +496,22 @@ async def analyze_image_endpoint(
 ):
     if state.rag_chain is None:
         raise HTTPException(status_code=503, detail="RAG chain not initialized")
-    
+    if not state.vlm_ready:
+        raise HTTPException(status_code=503, detail=f"VLM chưa sẵn sàng: {state.vlm_error}")
+
     try:
         start_time = time.time()
         image_bytes = await image.read()
-        
+
         skin_analysis = analyze_skin_image(image_bytes)
         if not skin_analysis:
             raise HTTPException(status_code=400, detail="Cannot analyze image")
-        
+
         is_severe = check_severity(skin_analysis)
         rag_query = build_image_analysis_query(skin_analysis, additional_text)
-        
+
         product_recommendation = state.rag_chain.invoke(rag_query)
-        
+
         return ImageAnalysisResponse(
             skin_analysis=skin_analysis,
             product_recommendation=product_recommendation,
@@ -441,7 +519,9 @@ async def analyze_image_endpoint(
             response_time=round(time.time() - start_time, 2),
             timestamp=datetime.now().isoformat()
         )
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
@@ -449,17 +529,19 @@ async def analyze_image_endpoint(
 async def analyze_image_base64_endpoint(request: ImageAnalysisRequest):
     if state.rag_chain is None:
         raise HTTPException(status_code=503, detail="RAG chain not initialized")
-    
+    if not state.vlm_ready:
+        raise HTTPException(status_code=503, detail=f"VLM chưa sẵn sàng: {state.vlm_error}")
+
     try:
         start_time = time.time()
         skin_analysis = analyze_skin_image(request.image_base64)
         if not skin_analysis:
             raise HTTPException(status_code=400, detail="Cannot analyze image")
-        
+
         is_severe = check_severity(skin_analysis)
         rag_query = build_image_analysis_query(skin_analysis, request.additional_text)
         product_recommendation = state.rag_chain.invoke(rag_query)
-        
+
         return ImageAnalysisResponse(
             skin_analysis=skin_analysis,
             product_recommendation=product_recommendation,
@@ -467,7 +549,9 @@ async def analyze_image_base64_endpoint(request: ImageAnalysisRequest):
             response_time=round(time.time() - start_time, 2),
             timestamp=datetime.now().isoformat()
         )
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
@@ -486,7 +570,7 @@ async def classify_skin_disease(
     """
     if state.classification_model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
-    
+
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Invalid file type")
 
@@ -499,23 +583,23 @@ async def classify_skin_disease(
             if state.face_detector:
                 image_np = np.array(image)
                 results = state.face_detector.process(image_np)
-                
+
                 if not results.detections:
                      raise HTTPException(
-                         status_code=400, 
+                         status_code=400,
                          detail="No face detected. Please upload a clear image of a face for facial analysis."
                      )
             else:
                 print("⚠️ Face detector skipped (not loaded)")
 
         input_tensor = IMAGE_TRANSFORMS['classification'](image).unsqueeze(0).to(device)
-        
+
         with torch.no_grad():
             outputs = state.classification_model(input_tensor)
             probabilities = torch.nn.functional.softmax(outputs, dim=1)
             confidence, predicted = torch.max(probabilities, 1)
             all_probs = probabilities[0].cpu().numpy()
-        
+
         # Safe Prediction Logic
         pred_index = predicted.item()
         if pred_index >= len(SKIN_CLASSES):
@@ -527,16 +611,16 @@ async def classify_skin_disease(
             }
 
         predicted_class = SKIN_CLASSES[pred_index]
-        
+
         # Get product suggestions
         product_suggestions = []
         if state.vectorstore:
             # Map disease to skin types
             suitable_skin_types = map_disease_to_skin_types(predicted_class)
-            
+
             # Get product suggestions
             product_suggestions = get_product_suggestions_by_skin_types(
-                state.vectorstore, 
+                state.vectorstore,
                 suitable_skin_types,
                 num_products=5
             )
@@ -556,33 +640,33 @@ async def classify_skin_disease(
 async def segment_skin_lesion(file: UploadFile = File(...)) -> Dict:
     if state.segmentation_model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
-    
+
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Invalid file type")
-    
+
     try:
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert("RGB")
         original_size = image.size
         image_np = np.array(image)
-        
+
         state.segmentation_model.set_image(image_np)
-        
+
         with torch.no_grad():
             masks, scores, _ = state.segmentation_model.predict(
                 point_coords=None, point_labels=None, box=None, multimask_output=False
             )
-        
+
         mask = masks[0] if len(masks) > 0 else np.zeros(image_np.shape[:2], dtype=np.uint8)
-        
+
         if mask.dtype == bool:
             mask = mask.astype(np.uint8) * 255
         elif mask.max() <= 1:
             mask = (mask * 255).astype(np.uint8)
-        
+
         black_bg = Image.new("RGB", original_size, (0, 0, 0))
         mask_pil = Image.fromarray(mask).convert("L")
-        
+
         if mask_pil.size != original_size:
             mask_pil = mask_pil.resize(original_size, Image.NEAREST)
 
@@ -594,11 +678,11 @@ async def segment_skin_lesion(file: UploadFile = File(...)) -> Dict:
         mask_image = Image.fromarray(mask)
         if mask_image.size != original_size:
             mask_image = mask_image.resize(original_size, Image.NEAREST)
-        
+
         buffer = io.BytesIO()
         mask_image.save(buffer, format="PNG")
         mask_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
-        
+
         return {
             "mask": mask_base64,
             "lesion_on_black": black_bg_base64,
@@ -620,7 +704,7 @@ async def face_detection(file: UploadFile = File(...)) -> Dict[str, bool]:
     """
     if state.face_detector is None:
         print("⚠️  Face detection model not loaded")
-        return {"has_face": True} 
+        return {"has_face": True}
     try:
         content = await file.read()
         image = Image.open(io.BytesIO(content)).convert("RGB")
@@ -637,23 +721,26 @@ async def face_detection(file: UploadFile = File(...)) -> Dict[str, bool]:
 
 @app.post("/api/analyze-skin-image-vlm", response_model=VLMAnalysisResponse)
 async def analyze_skin_image_vlm_endpoint(file: UploadFile = File(...), note: Optional[str] = Form(None)):
+    if not state.vlm_ready:
+        raise HTTPException(status_code=503, detail=f"VLM chưa sẵn sàng: {state.vlm_error}")
+
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Invalid file type. Please upload an image.")
 
-    try: 
+    try:
         start_time = time.time()
         image_bytes = await file.read()
         skin_analysis = analyze_skin_image(image_bytes, note)
-        
+
         if not skin_analysis:
             raise HTTPException(status_code=500, detail="VLM failed to analyze the image. Please try again.")
-        
+
         return VLMAnalysisResponse(
             skin_analysis=skin_analysis,
             response_time=round(time.time() - start_time, 2),
             timestamp=datetime.now().isoformat()
         )
-    
+
     except HTTPException as he:
         raise he
     except Exception as e:
