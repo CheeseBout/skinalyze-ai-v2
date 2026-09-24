@@ -5,7 +5,6 @@ Merged Features:
 - Advanced Skin Condition Detection (Length-prioritized matching)
 - Currency Conversion (USD -> VND)
 - Smart Product Grouping & Filtering (Improved)
-- VLM Skin Analysis (Base64/Bytes support)
 - Improved chunk_size and format_docs logic
 - Enhanced error handling from standalone
 - Comprehensive prompt template
@@ -16,11 +15,7 @@ import re
 from pathlib import Path
 from typing import Optional
 import torch
-from PIL import Image
 from openai import OpenAI
-import google.generativeai as genai
-import base64
-import io
 import time
 from dotenv import load_dotenv
 from langchain_community.document_loaders import TextLoader
@@ -40,8 +35,6 @@ MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
 # --- LLM (RAG chat) dùng OpenAI ---
 OPENAI_LLM_MODEL = "gpt-4o-mini"
-# --- VLM (phân tích ảnh da) dùng Gemini — xem ghi chú v4.1.0 ở đầu file ---
-GEMINI_VLM_MODEL = "gemini-3.5-flash"
 
 # Tỷ giá USD → VND (cố định)
 USD_TO_VND = 26349
@@ -128,30 +121,18 @@ SUPPORTED_SKIN_CONDITIONS = [
 # =============================================================================
 def setup_api_key():
     """
-    Setup API key cho cả 2 provider: OpenAI (LLM/RAG chat) và Google (VLM).
-    KHÔNG raise ngay khi chỉ thiếu 1 trong 2 key — LLM và VLM là 2 tính năng
-    độc lập (state.llm_ready / state.vlm_ready tách biệt ở main.py), thiếu
-    1 bên không nên chặn bên còn lại hoạt động. Chỉ raise khi thiếu CẢ HAI.
+    Setup API key cho OpenAI (dùng chung cho RAG chat và phân loại ảnh).
+    Raise ngay nếu thiếu key vì toàn bộ hệ thống chỉ còn phụ thuộc 1 provider.
     """
     global _openai_client
     openai_key = os.getenv("OPENAI_API_KEY")
-    google_key = os.getenv("GOOGLE_API_KEY")
 
-    if not openai_key and not google_key:
-        print("\n❌ CRITICAL ERROR: Thiếu cả OPENAI_API_KEY và GOOGLE_API_KEY.")
-        raise ValueError("OPENAI_API_KEY và GOOGLE_API_KEY đều đang thiếu.")
+    if not openai_key:
+        print("\n❌ CRITICAL ERROR: Thiếu OPENAI_API_KEY.")
+        raise ValueError("OPENAI_API_KEY đang thiếu.")
 
-    if openai_key:
-        _openai_client = OpenAI(api_key=openai_key)
-        print("✅ OpenAI API Key configured (dùng cho RAG chat)!\n")
-    else:
-        print("\n⚠️  OPENAI_API_KEY không có — RAG chat (LLM) sẽ không hoạt động.")
-
-    if google_key:
-        genai.configure(api_key=google_key)
-        print("✅ Google API Key configured (dùng cho phân tích ảnh da)!\n")
-    else:
-        print("\n⚠️  GOOGLE_API_KEY không có — phân tích ảnh (VLM) sẽ không hoạt động.")
+    _openai_client = OpenAI(api_key=openai_key)
+    print("✅ OpenAI API Key configured!\n")
 
 def extract_product_name(chunk_text):
     """Trích xuất tên sản phẩm từ chunk text"""
@@ -703,79 +684,6 @@ TRẢ LỜI (2-3 sản phẩm):"""
     return rag_chain
 
 # =============================================================================
-# VISION ANALYSIS - STATELESS (Base64/Bytes/PIL/Path support)
-# =============================================================================
-def analyze_skin_image(image_input, note: str = None):
-    """
-    Analyze skin image - STATELESS version with severity detection
-    Args:
-        image_input: PIL Image, base64 string, bytes, or file path
-        note: Additional note from user
-    Returns:
-        str: Analysis result
-    """
-    try:
-        print("\n📸 Analyzing skin image...")
-
-        # Handle multiple input types
-        img = None
-        if isinstance(image_input, str):
-            # Check for data URI
-            if image_input.startswith('data:image'):
-                image_input = image_input.split(',')[1]
-            try:
-                # Try base64 decode
-                image_bytes = base64.b64decode(image_input)
-                img = Image.open(io.BytesIO(image_bytes))
-            except:
-                # Try file path
-                img = Image.open(image_input)
-        elif isinstance(image_input, Image.Image):
-            img = image_input
-        elif isinstance(image_input, bytes):
-            img = Image.open(io.BytesIO(image_input))
-
-        if img is None:
-            raise ValueError("Invalid image input")
-
-        vision_prompt = """Bạn là trợ lý tư vấn mỹ phẩm. Nhiệm vụ của bạn là MÔ TẢ khách quan các đặc điểm bề mặt da nhìn thấy trong ảnh — phục vụ mục đích gợi ý sản phẩm chăm sóc da hàng ngày. Đây KHÔNG phải là chẩn đoán y tế hay đánh giá bệnh lý, chỉ là quan sát bề mặt da mang tính thẩm mỹ/chăm sóc da.
-
-Hãy mô tả NGẮN GỌN theo các mục sau:
-
-1. LOẠI DA QUAN SÁT ĐƯỢC: (khô/dầu/hỗn hợp/nhạy cảm/thường) — dựa trên độ bóng và kết cấu bề mặt
-
-2. ĐẶC ĐIỂM BỀ MẶT DA QUAN SÁT ĐƯỢC:
-- Các đốm/nốt trên da (nếu có): kích thước, mật độ, phân bố chung chung
-- Vùng da không đều màu, khô ráp, hoặc bóng dầu (nếu có)
-- Dấu hiệu lão hóa bề mặt (nếu có): nếp nhăn, độ đàn hồi
-
-3. MỨC ĐỘ ƯU TIÊN CHĂM SÓC: Chọn 1 trong 4, dựa trên mức độ rõ rệt của đặc điểm bề mặt quan sát được (KHÔNG phải đánh giá y tế, QUAN TRỌNG phải ghi rõ):
-   - NHẸ: Đặc điểm nhỏ, ít, có thể chăm sóc bằng sản phẩm cơ bản
-   - TRUNG BÌNH: Đặc điểm khá rõ, cần sản phẩm chuyên biệt hơn
-   - NẶNG: Đặc điểm lan rộng, cần sản phẩm chuyên sâu và chăm sóc kiên trì
-   - RẤT NẶNG: Đặc điểm nổi bật, lan rộng nhiều — bên cạnh sản phẩm chăm sóc, nên tham khảo thêm ý kiến chuyên gia da liễu
-
-4. GỢI Ý CHĂM SÓC: (1 câu ngắn, hướng loại sản phẩm phù hợp)
-
-Trả lời NGẮN GỌN, khách quan, bằng tiếng Việt, chỉ tập trung mô tả bề mặt da phục vụ tư vấn mỹ phẩm."""
-
-        if note:
-            vision_prompt += f"\n\nGhi chú thêm từ người dùng: {note}"
-
-        vision_model = genai.GenerativeModel(GEMINI_VLM_MODEL)
-        response = vision_model.generate_content([vision_prompt, img])
-        analysis = response.text
-        print("✅ Analysis complete!")
-        return analysis
-
-    except FileNotFoundError:
-        print(f"❌ Không tìm thấy file ảnh")
-        return None
-    except Exception as e:
-        print(f"❌ Error analyzing image: {str(e)}")
-        return None
-
-# =============================================================================
 # SELF-TEST HELPERS (dùng cho main.py lifespan để phát hiện lỗi sớm)
 # =============================================================================
 def test_llm_connection():
@@ -790,16 +698,6 @@ def test_llm_connection():
         messages=[{"role": "user", "content": "ping"}],
         max_tokens=5,
     )
-
-def test_vlm_connection():
-    """
-    Gọi thử 1 request ảnh nhỏ tới VLM (Gemini) để xác nhận model/API key
-    còn hoạt động. KHÔNG tự bắt exception — để caller (main.py lifespan)
-    quyết định cách xử lý và lưu lỗi vào state.
-    """
-    tiny_img = Image.new("RGB", (16, 16), color="white")
-    vision_model = genai.GenerativeModel(GEMINI_VLM_MODEL)
-    vision_model.generate_content(["ping", tiny_img])
 
 # =============================================================================
 # HELPER FUNCTIONS FOR NESTJS INTEGRATION
@@ -865,14 +763,15 @@ def check_severity(analysis: str) -> bool:
     return any(keyword in analysis.upper() for keyword in ['RẤT NẶNG', 'RẤT NGHIÊM TRỌNG'])
 
 # =============================================================================
-# CLASSIFICATION-BASED ANALYSIS QUERY (thay thế VLM cho /analyze-image)
+# CLASSIFICATION-BASED ANALYSIS QUERY
 # =============================================================================
-# v4.2.0: OpenAI (2 lần) và Gemini (1 lần) đều tự từ chối mô tả ảnh khuôn mặt
-# người thật dù đổi prompt nhiều cách — refusal xảy ra ở tầng model, không
-# phải bug hay safety filter có thể nới lỏng. /analyze-image và
-# /analyze-image-base64 chuyển sang dùng classifier EfficientNet-B0 tự host
-# (đã có sẵn, không gọi API bên ngoài, không có rủi ro bị từ chối) để xác
-# định tình trạng da, chỉ dùng LLM cho bước tư vấn sản phẩm bằng văn bản.
+# Model vision (OpenAI, và trước đó là Gemini) đều tự từ chối mô tả ảnh
+# khuôn mặt người thật dù đổi prompt nhiều cách — refusal xảy ra ở tầng
+# model, không phải bug hay safety filter có thể nới lỏng. Toàn bộ phân
+# tích ảnh (/chat, /analyze-image, /analyze-image-base64) dùng classifier
+# EfficientNet-B0 tự host (không gọi API bên ngoài, không có rủi ro bị từ
+# chối) để xác định tình trạng da, chỉ dùng LLM cho bước tư vấn sản phẩm
+# bằng văn bản.
 DISEASE_CLASS_TO_VIETNAMESE = {
     'Acne': 'Mụn (Acne)',
     'Actinic_Keratosis': 'Dày sừng ánh sáng (Actinic Keratosis)',

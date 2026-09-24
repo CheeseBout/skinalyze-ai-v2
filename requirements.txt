@@ -4,14 +4,13 @@ python-multipart
 python-dotenv
 
 # --- AI Core ---
-# LLM (RAG chat) = OpenAI GPT-4o-mini | VLM (phân tích ảnh) = Google Gemini (hybrid)
+# LLM (RAG chat) = OpenAI GPT-4o-mini
 langchain==0.1.16
 langchain-community==0.0.33
 langchain-openai>=0.1.0
 langchain-chroma==0.1.0
 langchain-core<0.2.0
 openai>=1.30.0
-google-generativeai==0.4.1
 chromadb==0.4.22
 
 # --- Vector Store Dependencies (FIX LỖI 1) ---

@@ -32,15 +32,12 @@ from RAG_cosmetic import (
     setup_api_key,
     load_or_create_vectorstore,
     setup_rag_chain,
-    analyze_skin_image,
     build_classification_analysis_query,
     detect_skin_condition_and_types,
     get_product_suggestions_by_skin_types,
     map_disease_to_skin_types,
     test_llm_connection,
-    test_vlm_connection,
     OPENAI_LLM_MODEL,
-    GEMINI_VLM_MODEL,
 )
 
 # =============================================================================
@@ -91,11 +88,6 @@ class AppState:
     llm_ready: bool = False
     llm_error: Optional[str] = None
     llm_model: str = OPENAI_LLM_MODEL
-
-    # --- VLM (image analysis) status ---
-    vlm_ready: bool = False
-    vlm_error: Optional[str] = None
-    vlm_model: str = GEMINI_VLM_MODEL
 
 state = AppState()
 
@@ -238,7 +230,6 @@ async def lifespan(app: FastAPI):
         setup_api_key()
     except Exception as e:
         state.llm_error = str(e)
-        state.vlm_error = str(e)
         print(f"\n❌ API key setup failed: {e}\n")
     else:
         # --- 2. Vector store + RAG chain ---
@@ -256,8 +247,7 @@ async def lifespan(app: FastAPI):
         # --- 3. LLM self-test (chỉ chạy nếu rag_chain đã dựng xong) ---
         # Constructing ChatOpenAI() KHÔNG gọi API thật, nên phải tự test
         # 1 request nhỏ để phát hiện model bị đổi/khai tử hoặc sai API key
-        # ngay lúc khởi động, thay vì chờ user gặp lỗi 500 (như sự cố Gemini
-        # 2.0 Flash bị Google khai tử ngày 2026-06-01).
+        # ngay lúc khởi động, thay vì chờ user gặp lỗi 500.
         if state.rag_chain is not None:
             try:
                 print(f"\n🧪 Testing LLM connection ({state.llm_model})...")
@@ -269,18 +259,6 @@ async def lifespan(app: FastAPI):
                 state.llm_ready = False
                 state.llm_error = str(e)
                 print(f"❌ LLM self-test failed: {e}")
-
-        # --- 4. VLM self-test (độc lập với RAG chain) ---
-        try:
-            print(f"\n🧪 Testing VLM connection ({state.vlm_model})...")
-            test_vlm_connection()
-            state.vlm_ready = True
-            state.vlm_error = None
-            print("✅ VLM self-test passed")
-        except Exception as e:
-            state.vlm_ready = False
-            state.vlm_error = str(e)
-            print(f"❌ VLM self-test failed: {e}")
 
     print("\n✅ Server ready!")
     print("📚 API Documentation: http://localhost:8000/docs")
@@ -340,14 +318,6 @@ class HealthResponse(BaseModel):
     llm_status: str
     llm_model: str
     llm_error: Optional[str] = None
-    vlm_status: str
-    vlm_model: str
-    vlm_error: Optional[str] = None
-    timestamp: str
-
-class VLMAnalysisResponse(BaseModel):
-    skin_analysis: str
-    response_time: float
     timestamp: str
 
 # =============================================================================
@@ -358,7 +328,6 @@ class VLMAnalysisResponse(BaseModel):
 async def health_check():
     core_ready = (
         state.llm_ready
-        and state.vlm_ready
         and state.classification_model is not None
         and state.segmentation_model is not None
     )
@@ -371,9 +340,6 @@ async def health_check():
         llm_status="ready" if state.llm_ready else "error",
         llm_model=state.llm_model,
         llm_error=state.llm_error,
-        vlm_status="ready" if state.vlm_ready else "error",
-        vlm_model=state.vlm_model,
-        vlm_error=state.vlm_error,
         timestamp=datetime.now().isoformat()
     )
 
@@ -387,7 +353,7 @@ async def chat_endpoint(
     image: Optional[UploadFile] = File(None)
 ):
     """
-    Stateless chat endpoint supporting Text + Optional Image (VLM) + Intelligent Product Recommendations.
+    Stateless chat endpoint supporting Text + Optional Image (classifier-based) + Intelligent Product Recommendations.
     """
     if state.rag_chain is None:
         raise HTTPException(status_code=503, detail="RAG chain not initialized")
@@ -404,20 +370,33 @@ async def chat_endpoint(
                 print("⚠️ Failed to parse conversation_history JSON")
                 history_list = []
 
-        # 2. VLM Analysis (If image is provided)
-        vlm_context_str = ""
+        # 2. Image analysis via EfficientNet classifier (If image is provided)
+        image_context_str = ""
         if image:
-            if not state.vlm_ready:
-                raise HTTPException(status_code=503, detail=f"VLM chưa sẵn sàng: {state.vlm_error}")
+            if state.classification_model is None:
+                raise HTTPException(status_code=503, detail="Classification model not loaded")
 
             if not image.content_type.startswith("image/"):
                 raise HTTPException(status_code=400, detail="Uploaded file is not an image")
 
             image_bytes = await image.read()
-            skin_analysis = analyze_skin_image(image_bytes, note=question)
+            pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
-            if skin_analysis:
-                vlm_context_str = f"""
+            input_tensor = IMAGE_TRANSFORMS['classification'](pil_image).unsqueeze(0).to(device)
+            with torch.no_grad():
+                outputs = state.classification_model(input_tensor)
+                probabilities = torch.nn.functional.softmax(outputs, dim=1)
+                confidence, predicted = torch.max(probabilities, 1)
+
+            pred_index = predicted.item()
+            if pred_index < len(SKIN_CLASSES):
+                predicted_class = SKIN_CLASSES[pred_index]
+                confidence_score = float(confidence.item())
+                skin_analysis, _ = build_classification_analysis_query(
+                    predicted_class, confidence_score
+                )
+
+                image_context_str = f"""
 \n[THÔNG TIN TỪ ẢNH NGƯỜI DÙNG GỬI KÈM]:
 Hệ thống đã phân tích ảnh da của người dùng với kết quả sau:
 {skin_analysis}
@@ -461,7 +440,7 @@ Hệ thống đã phân tích ảnh da của người dùng với kết quả sa
 
         # 5. Construct Final Prompt for RAG
         full_query = f"""{context_str}
-{vlm_context_str}
+{image_context_str}
 {condition_context_str}
 
 CÂU HỎI HIỆN TẠI CỦA NGƯỜI DÙNG: {question}
@@ -757,34 +736,6 @@ async def face_detection(file: UploadFile = File(...)) -> Dict[str, bool]:
     except Exception as e:
         print(f"❌ Error during face detection: {e}")
         return {"has_face": False}
-
-@app.post("/api/analyze-skin-image-vlm", response_model=VLMAnalysisResponse)
-async def analyze_skin_image_vlm_endpoint(file: UploadFile = File(...), note: Optional[str] = Form(None)):
-    if not state.vlm_ready:
-        raise HTTPException(status_code=503, detail=f"VLM chưa sẵn sàng: {state.vlm_error}")
-
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Invalid file type. Please upload an image.")
-
-    try:
-        start_time = time.time()
-        image_bytes = await file.read()
-        skin_analysis = analyze_skin_image(image_bytes, note)
-
-        if not skin_analysis:
-            raise HTTPException(status_code=500, detail="VLM failed to analyze the image. Please try again.")
-
-        return VLMAnalysisResponse(
-            skin_analysis=skin_analysis,
-            response_time=round(time.time() - start_time, 2),
-            timestamp=datetime.now().isoformat()
-        )
-
-    except HTTPException as he:
-        raise he
-    except Exception as e:
-        print(f"❌ Error in VLM endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 # =============================================================================
 # RUN SERVER
