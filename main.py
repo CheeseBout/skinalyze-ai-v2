@@ -17,12 +17,12 @@ from PIL import Image
 import io
 import base64
 import numpy as np
+import cv2
 from typing import Dict, Optional, List
 import os
 import time
 import json
 from datetime import datetime
-import mediapipe as mp
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -201,15 +201,23 @@ def load_segmentation_model():
         return None
 
 def load_face_detection_model():
-    """Load Mediapipe Face Detection model"""
+    """Load OpenCV Haar Cascade face detector (bundled with opencv-python-headless)."""
     try:
-        mp_face_detection = mp.solutions.face_detection
-        detector = mp_face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.5)
+        cascade_path = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+        detector = cv2.CascadeClassifier(cascade_path)
+        if detector.empty():
+            raise RuntimeError(f"Failed to load cascade file at {cascade_path}")
         print("✅ Face detection model loaded")
         return detector
     except Exception as e:
         print(f"❌ Error loading face detection model: {e}")
         return None
+
+def detect_faces(detector: cv2.CascadeClassifier, image_np: np.ndarray) -> bool:
+    """Return True if at least one face is detected in the given RGB image array."""
+    gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
+    faces = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
+    return len(faces) > 0
 
 # =============================================================================
 # LIFESPAN (STARTUP/SHUTDOWN)
@@ -600,9 +608,7 @@ async def classify_skin_disease(
         if notes == 'facial':
             if state.face_detector:
                 image_np = np.array(image)
-                results = state.face_detector.process(image_np)
-
-                if not results.detections:
+                if not detect_faces(state.face_detector, image_np):
                      raise HTTPException(
                          status_code=400,
                          detail="No face detected. Please upload a clear image of a face for facial analysis."
@@ -728,11 +734,7 @@ async def face_detection(file: UploadFile = File(...)) -> Dict[str, bool]:
         image = Image.open(io.BytesIO(content)).convert("RGB")
         image_np = np.array(image)
 
-        results = state.face_detector.process(image_np)
-
-        if results.detections:
-            return {"has_face": True}
-        return {"has_face": False}
+        return {"has_face": detect_faces(state.face_detector, image_np)}
     except Exception as e:
         print(f"❌ Error during face detection: {e}")
         return {"has_face": False}
