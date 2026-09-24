@@ -11,6 +11,10 @@ langchain-openai>=0.1.0
 langchain-chroma==0.1.0
 langchain-core<0.2.0
 openai>=1.30.0
+# chromadb==0.4.22 pins chroma-hnswlib==0.7.3, which has no prebuilt wheel
+# for Python 3.12 on any platform — pip builds it from source (needs a
+# C/C++ compiler: build-essential on Linux/Docker, "Microsoft C++ Build
+# Tools" on Windows). See README's Python version note.
 chromadb==0.4.22
 
 # --- Vector Store Dependencies (FIX LỖI 1) ---

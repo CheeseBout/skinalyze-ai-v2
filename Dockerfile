@@ -1,11 +1,15 @@
-# Sử dụng Python 3.10
-FROM python:3.10-slim
+# Sử dụng Python 3.12.10
+FROM python:3.12.10-slim
 
 # Thiết lập thư mục làm việc
 WORKDIR /app
 
 # Cài đặt thư viện hệ thống
+# build-essential: cần để pip build chroma-hnswlib từ source — bản pin trong
+# requirements.txt (chroma-hnswlib==0.7.3, qua chromadb==0.4.22) chưa có
+# wheel dựng sẵn cho Python 3.12 (xem ghi chú trong requirements.txt).
 RUN apt-get update && apt-get install -y \
+    build-essential \
     git \
     libgl1 \
     libglib2.0-0 \
@@ -20,8 +24,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN mkdir -p data models db_chroma
 
 # --- FIX SAM2 CONFIG: Tải file config về đúng cấu trúc package ---
-RUN mkdir -p /usr/local/lib/python3.10/site-packages/sam2/configs/sam2.1/
-RUN curl -L -o /usr/local/lib/python3.10/site-packages/sam2/configs/sam2.1/sam2.1_hiera_t.yaml https://raw.githubusercontent.com/facebookresearch/sam2/main/sam2/configs/sam2.1/sam2.1_hiera_t.yaml
+RUN mkdir -p /usr/local/lib/python3.12/site-packages/sam2/configs/sam2.1/
+RUN curl -L -o /usr/local/lib/python3.12/site-packages/sam2/configs/sam2.1/sam2.1_hiera_t.yaml https://raw.githubusercontent.com/facebookresearch/sam2/main/sam2/configs/sam2.1/sam2.1_hiera_t.yaml
 
 # --- FIX LỖI PERMISSION (QUAN TRỌNG) ---
 # Chuyển Cache ra thư mục /tmp để tránh lỗi Permission Denied

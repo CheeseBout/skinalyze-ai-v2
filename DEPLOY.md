@@ -29,10 +29,17 @@ Repo đã được cấu hình sẵn cho Spaces (xem header YAML ở đầu [REA
 
 ## Chạy local không qua Docker
 
+Yêu cầu Python 3.12.10 (xem [.python-version](.python-version)).
+
 ```bash
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
 ```
+
+> **Windows:** `pip install` sẽ build `chroma-hnswlib` từ source (chưa có wheel
+> dựng sẵn cho Python 3.12 trên Windows) — cần cài **[Microsoft C++ Build
+> Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)** (workload
+> "Desktop development with C++") trước khi `pip install`.
 
 ## 🔒 Bảo mật API key
 
@@ -63,3 +70,4 @@ Nếu vô tình commit API key lên Git:
 | `503 RAG chain not initialized` | Vector store chưa khởi tạo được — kiểm tra `data/product_chunks.txt` tồn tại và log lúc startup |
 | `503 Classification/Segmentation model not loaded` | File weight trong `models/` không tồn tại hoặc chưa được Git LFS pull |
 | Lỗi khi build SAM2 trong Docker | Kiểm tra bước tải `sam2.1_hiera_t.yaml` trong `Dockerfile` chạy thành công (cần mạng lúc build) |
+| `error: Microsoft Visual C++ 14.0 or greater is required` khi `pip install` trên Windows | Cần cài Microsoft C++ Build Tools — xem mục "Chạy local không qua Docker" ở trên |

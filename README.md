@@ -37,6 +37,7 @@ Toàn bộ API **stateless**: không lưu session hay chat history phía server 
 
 | Thành phần | Công nghệ |
 |---|---|
+| Runtime | Python 3.12.10 |
 | Web framework | FastAPI + Uvicorn |
 | LLM (chatbot) | OpenAI `gpt-4o-mini` qua LangChain |
 | Vector store | ChromaDB, embedding `sentence-transformers/all-MiniLM-L6-v2` |
@@ -74,6 +75,8 @@ skinalyze/
 
 ## 🔧 Cài đặt
 
+**Yêu cầu Python 3.12.10** (xem [.python-version](.python-version)).
+
 ```bash
 python -m venv venv
 # Windows: venv\Scripts\activate | macOS/Linux: source venv/bin/activate
@@ -82,6 +85,12 @@ pip install -r requirements.txt
 cp .env.example .env
 # Mở .env và điền OPENAI_API_KEY
 ```
+
+> **Windows:** bước `pip install` sẽ build `chroma-hnswlib` từ source (chưa có
+> wheel dựng sẵn cho Python 3.12 trên Windows) — cần cài **[Microsoft C++ Build
+> Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)** (workload
+> "Desktop development with C++") trước, nếu chưa có. Linux/macOS không cần bước
+> này (đã có wheel dựng sẵn), Docker build tự cài `build-essential`.
 
 `.env.example` liệt kê toàn bộ biến môi trường:
 
