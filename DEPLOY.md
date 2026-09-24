@@ -1,269 +1,65 @@
-# 🚀 Hướng dẫn triển khai RAG Cosmetic Chatbot
+# 🚀 Hướng dẫn triển khai
 
-## 📦 Các bước đóng gói và upload lên GitHub
-
-### **Bước 1: Di chuyển files vào đúng thư mục**
+## Chuẩn bị
 
 ```bash
-# Di chuyển vào thư mục project
-cd C:\FPT\RAG
-
-# Di chuyển file data vào thư mục data/
-move product_chunks.txt data\
-move cosmetics.csv data\
+cp .env.example .env
+# Điền OPENAI_API_KEY vào .env — KHÔNG commit file này lên Git
 ```
 
-### **Bước 2: Tạo file .env**
+`.env` đã nằm trong `.gitignore`. Xem [.env.example](.env.example) để biết toàn bộ biến môi trường.
+
+## Deploy bằng Docker (khuyến nghị)
 
 ```bash
-# Copy template
-copy .env.example .env
-
-# Mở .env và điền API key của bạn
-notepad .env
+docker build -t skinalyze .
+docker run -p 7860:7860 --env-file .env skinalyze
 ```
 
-### **Bước 3: Kiểm tra cấu trúc**
+Server chạy tại `http://localhost:7860`.
 
-Đảm bảo cấu trúc như sau:
+## Deploy lên Hugging Face Spaces
 
-```
-C:\FPT\RAG\
-├── RAG_cosmetic.py
-├── config.py
-├── requirements.txt
-├── .env.example
-├── .env              # ← Không commit file này!
-├── .gitignore
-├── README.md
-├── DEPLOY.md
-├── data/
-│   ├── product_chunks.txt
-│   └── cosmetics.csv
-└── (db_chroma/ và chat_history/ sẽ tự tạo khi chạy)
-```
+Repo đã được cấu hình sẵn cho Spaces (xem header YAML ở đầu [README.md](README.md): `sdk: docker`, `app_port: 7860`).
 
-### **Bước 4: Khởi tạo Git repository**
+1. Tạo Space mới, chọn SDK **Docker**.
+2. Push repo này lên Space (qua Git remote hoặc kéo thả file trên web UI).
+3. Vào **Settings → Repository secrets**, thêm `OPENAI_API_KEY`. Không đặt API key trong file `.env` khi deploy lên Spaces — dùng Secrets.
+4. Space sẽ tự build Dockerfile và chạy `uvicorn app.main:app --host 0.0.0.0 --port 7860`.
+
+## Chạy local không qua Docker
 
 ```bash
-# Khởi tạo git
-git init
-
-# Thêm tất cả files (trừ những file trong .gitignore)
-git add .
-
-# Commit
-git commit -m "Initial commit: RAG Cosmetic Chatbot"
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
 ```
 
-### **Bước 5: Tạo repository trên GitHub**
+## 🔒 Bảo mật API key
 
-1. Vào https://github.com/new
-2. Tạo repository mới: `rag-cosmetic-chatbot`
-3. **KHÔNG** tick "Initialize with README" (đã có sẵn)
-4. Click "Create repository"
-
-### **Bước 6: Push code lên GitHub**
-
-```bash
-# Liên kết với GitHub repository
-git remote add origin https://github.com/YOUR_USERNAME/rag-cosmetic-chatbot.git
-
-# Push code
-git branch -M main
-git push -u origin main
-```
-
----
-
-## 🌐 Triển khai lên Server/Cloud
-
-### **Option 1: Local Server (PC/Laptop)**
-
-**Ưu điểm:** Miễn phí, full control
-**Nhược điểm:** Cần máy luôn bật
-
-```bash
-# Chạy trong terminal
-python RAG_cosmetic.py
-```
-
-### **Option 2: Heroku (Free tier)**
-
-**Ưu điểm:** Dễ deploy, miễn phí
-**Nhược điểm:** Giới hạn thời gian chạy
-
-```bash
-# Cài Heroku CLI
-# https://devcenter.heroku.com/articles/heroku-cli
-
-# Login
-heroku login
-
-# Tạo app
-heroku create rag-cosmetic-chatbot
-
-# Set API key
-heroku config:set GOOGLE_API_KEY=your-api-key
-
-# Deploy
-git push heroku main
-```
-
-### **Option 3: Railway.app**
-
-**Ưu điểm:** Miễn phí, dễ dùng, hỗ trợ Python tốt
-
-1. Vào https://railway.app
-2. Connect GitHub repository
-3. Add environment variable: `GOOGLE_API_KEY`
-4. Deploy tự động!
-
-### **Option 4: Google Cloud Run**
-
-**Ưu điểm:** Scalable, serverless
-**Nhược điểm:** Phức tạp hơn
-
-Cần tạo thêm `Dockerfile`:
-
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
-CMD ["python", "RAG_cosmetic.py"]
-```
-
----
-
-## 🔒 Bảo mật API Key
-
-### **⚠️ QUAN TRỌNG:**
-
-**KHÔNG BAO GIỜ commit file `.env` hoặc API key lên GitHub!**
-
-✅ **Đúng:**
-```bash
-# File .gitignore đã có:
-.env
-```
-
-❌ **SAI:**
-```python
-# Đừng hard-code trong code:
-GOOGLE_API_KEY = "AIzaSy..."  # ← NGUY HIỂM!
-```
-
-### **Nếu vô tình commit API key:**
-
-1. **XÓA NGAY** API key trên Google Cloud Console
-2. **TẠO KEY MỚI**
-3. **Xóa key khỏi Git history:**
-
-```bash
-# Cài BFG Repo Cleaner
-# https://rtyley.github.io/bfg-repo-cleaner/
-
-# Xóa key khỏi history
-bfg --replace-text passwords.txt
-git reflog expire --expire=now --all
-git gc --prune=now --aggressive
-git push --force
-```
-
----
-
-## 📊 Theo dõi và Logging
-
-### **Thêm logging vào code:**
+**KHÔNG BAO GIỜ** commit file `.env` hoặc hard-code API key trong code:
 
 ```python
-import logging
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('chatbot.log'),
-        logging.StreamHandler()
-    ]
-)
+# ❌ SAI
+OPENAI_API_KEY = "sk-..."  # NGUY HIỂM!
 ```
 
----
+Nếu vô tình commit API key lên Git:
 
-## 🧪 Testing trước khi deploy
+1. **Thu hồi ngay** key đó trên [platform.openai.com](https://platform.openai.com/api-keys) và tạo key mới.
+2. Xoá key khỏi lịch sử Git bằng [BFG Repo-Cleaner](https://rtyley.github.io/bfg-repo-cleaner/) hoặc `git filter-repo`, sau đó `git push --force`.
 
-### **1. Test local:**
+## Production checklist
 
-```bash
-python RAG_cosmetic.py
-```
-
-### **2. Test các tính năng:**
-
-- [ ] Chat text bình thường
-- [ ] Upload ảnh và phân tích
-- [ ] Conversation memory (hỏi tiếp)
-- [ ] Cảnh báo severity (ảnh da rất nặng)
-- [ ] Lưu chat history khi quit
-
-### **3. Test với data mẫu:**
-
-```bash
-# Tạo file test
-pytest tests/  # (nếu có viết tests)
-```
-
----
-
-## 📈 Scale và Tối ưu
-
-### **Nếu có nhiều users:**
-
-1. **Thêm Redis** để cache results
-2. **Load balancing** với Nginx
-3. **Queue system** (Celery) cho VLM tasks
-4. **Database** thay vì file JSON cho chat history
-
----
+- [ ] **CORS:** đặt `CORS_ORIGINS` trong `.env` thành domain cụ thể của NestJS backend/frontend thay vì `*`
+- [ ] **HTTPS:** đặt server sau reverse proxy (Nginx, Caddy) hoặc dùng HTTPS có sẵn của platform (Spaces, Cloud Run...)
+- [ ] **Rate limiting / Authentication:** endpoint hiện không có auth — nếu expose public, thêm API key/JWT hoặc rate limit ở tầng gateway/NestJS
+- [ ] **Model weights:** đảm bảo Git LFS đã pull đầy đủ `models/*.pt`, `models/*.pth` trước khi build image
 
 ## 🆘 Troubleshooting
 
-### **Lỗi: "No API key found"**
-→ Kiểm tra file `.env` và `config.py`
-
-### **Lỗi: "Vector store not found"**
-→ Chạy lần đầu sẽ tạo database tự động, cần file `product_chunks.txt`
-
-### **Lỗi: "Rate limit exceeded"**
-→ Gemini API free tier có giới hạn, đợi 1 phút hoặc nâng cấp
-
-### **Bot không nhớ context**
-→ Kiểm tra `conversation_context` có được khởi tạo đúng không
-
----
-
-## 📞 Support
-
-- **Issues**: https://github.com/YOUR_USERNAME/rag-cosmetic-chatbot/issues
-- **Email**: your-email@example.com
-
----
-
-## ✅ Checklist triển khai
-
-- [ ] Đã test local thành công
-- [ ] Đã tạo `.env` và không commit lên Git
-- [ ] Đã di chuyển data vào thư mục `data/`
-- [ ] Đã kiểm tra `.gitignore`
-- [ ] Đã commit code
-- [ ] Đã tạo GitHub repository
-- [ ] Đã push lên GitHub
-- [ ] Đã thêm README.md đầy đủ
-- [ ] (Optional) Đã deploy lên cloud
-
----
-
-**🎉 Chúc mừng! Project của bạn đã sẵn sàng!**
+| Vấn đề | Nguyên nhân thường gặp |
+|---|---|
+| `GET /health` trả `llm_status: "error"` | Thiếu hoặc sai `OPENAI_API_KEY`, hoặc model bị đổi tên/khai tử — xem `llm_error` trong response |
+| `503 RAG chain not initialized` | Vector store chưa khởi tạo được — kiểm tra `data/product_chunks.txt` tồn tại và log lúc startup |
+| `503 Classification/Segmentation model not loaded` | File weight trong `models/` không tồn tại hoặc chưa được Git LFS pull |
+| Lỗi khi build SAM2 trong Docker | Kiểm tra bước tải `sam2.1_hiera_t.yaml` trong `Dockerfile` chạy thành công (cần mạng lúc build) |
