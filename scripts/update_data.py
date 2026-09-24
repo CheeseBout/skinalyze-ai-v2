@@ -1,17 +1,18 @@
 """
 Script cập nhật data: Chuyển CSV mới sang product_chunks.txt
-Chạy: python update_data.py
+Chạy: python scripts/update_data.py
 """
 
 import pandas as pd
 from pathlib import Path
 import shutil
 
-PATH = Path(__file__).parent.resolve()
+# scripts/update_data.py -> scripts/ -> repo root
+BASE_DIR = Path(__file__).resolve().parent.parent
 # Đường dẫn
-CSV_FILE = PATH / "data" / "fixed_cosmetic.csv"
-CHUNKS_FILE = PATH / "data" / "product_chunks.txt"
-DB_DIR = PATH / "db_chroma"
+CSV_FILE = BASE_DIR / "data" / "fixed_cosmetic.csv"
+CHUNKS_FILE = BASE_DIR / "data" / "product_chunks.txt"
+DB_DIR = BASE_DIR / "db_chroma"
 
 def get_skin_types(row):
     """Chuyển đổi cột binary sang tên loại da"""
@@ -119,8 +120,8 @@ Ingredients: {ingredients}
     print(f"   • Chunks: {len(chunks)}")
     print(f"   • Kích thước: {file_size:.2f} MB")
     print(f"\n💡 Bước tiếp theo:")
-    print(f"   1. Chạy: python RAG_cosmetic.py")
-    print(f"   2. Bot sẽ tự động tạo database mới từ chunks")
+    print(f"   1. Khởi động lại server (uvicorn app.main:app)")
+    print(f"   2. Server sẽ tự động tạo database mới từ chunks khi startup")
     print("=" * 80)
 
 if __name__ == "__main__":

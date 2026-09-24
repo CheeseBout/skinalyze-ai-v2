@@ -12,12 +12,11 @@ Merged Features:
 
 import os
 import re
-from pathlib import Path
+import time
 from typing import Optional
+
 import torch
 from openai import OpenAI
-import time
-from dotenv import load_dotenv
 from langchain_community.document_loaders import TextLoader
 from langchain_chroma import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -27,17 +26,18 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 
-# CONFIGURATION
-PATH = Path(__file__).parent.resolve()
-CHUNKS_FILE = PATH / "data" / "product_chunks.txt"
-PERSIST_DIRECTORY = PATH / "db_chroma"
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-
-# --- LLM (RAG chat) dùng OpenAI ---
-OPENAI_LLM_MODEL = "gpt-4o-mini"
-
-# Tỷ giá USD → VND (cố định)
-USD_TO_VND = 26349
+from app.config import (
+    CHUNKS_FILE,
+    DB_DIR,
+    EMBEDDING_MODEL,
+    OPENAI_API_KEY,
+    OPENAI_MODEL,
+    LLM_TEMPERATURE,
+    LLM_MAX_TOKENS,
+    LLM_MAX_RETRIES,
+    LLM_TIMEOUT,
+    USD_TO_VND,
+)
 
 # Global cache for embeddings
 _CACHED_EMBEDDINGS = None
@@ -46,10 +46,10 @@ _CACHED_EMBEDDINGS = None
 _openai_client: Optional[OpenAI] = None
 
 def get_openai_client() -> OpenAI:
-    """Trả về OpenAI client dùng chung cho RAG chain, VLM, và các hàm self-test."""
+    """Trả về OpenAI client dùng chung cho RAG chain và các hàm self-test."""
     global _openai_client
     if _openai_client is None:
-        _openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        _openai_client = OpenAI(api_key=OPENAI_API_KEY)
     return _openai_client
 
 # =============================================================================
@@ -125,13 +125,12 @@ def setup_api_key():
     Raise ngay nếu thiếu key vì toàn bộ hệ thống chỉ còn phụ thuộc 1 provider.
     """
     global _openai_client
-    openai_key = os.getenv("OPENAI_API_KEY")
 
-    if not openai_key:
+    if not OPENAI_API_KEY:
         print("\n❌ CRITICAL ERROR: Thiếu OPENAI_API_KEY.")
         raise ValueError("OPENAI_API_KEY đang thiếu.")
 
-    _openai_client = OpenAI(api_key=openai_key)
+    _openai_client = OpenAI(api_key=OPENAI_API_KEY)
     print("✅ OpenAI API Key configured!\n")
 
 def extract_product_name(chunk_text):
@@ -232,13 +231,13 @@ def load_or_create_vectorstore():
             print(f"\n⚡ Sử dụng cached embedding model")
             embeddings = _CACHED_EMBEDDINGS
         else:
-            print(f"\n⏳ Đang tải embedding model: {MODEL_NAME}...")
+            print(f"\n⏳ Đang tải embedding model: {EMBEDDING_MODEL}...")
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
             print(f"   🖥️ Sử dụng thiết bị: {device}")
 
             try:
                 embeddings = HuggingFaceEmbeddings(
-                    model_name=MODEL_NAME,
+                    model_name=EMBEDDING_MODEL,
                     model_kwargs={'device': device},
                     encode_kwargs={'normalize_embeddings': True}
                 )
@@ -252,13 +251,13 @@ def load_or_create_vectorstore():
         # ----- Load hoặc Tạo Database -----
         should_create_new = True
 
-        if os.path.exists(PERSIST_DIRECTORY) and len(os.listdir(PERSIST_DIRECTORY)) > 0:
-            print(f"📂 Phát hiện Vector Store có sẵn tại: {PERSIST_DIRECTORY}")
+        if os.path.exists(DB_DIR) and len(os.listdir(DB_DIR)) > 0:
+            print(f"📂 Phát hiện Vector Store có sẵn tại: {DB_DIR}")
             print("⏳ Đang load database...\n")
 
             try:
                 db = Chroma(
-                    persist_directory=str(PERSIST_DIRECTORY),
+                    persist_directory=str(DB_DIR),
                     embedding_function=embeddings
                 )
                 count = db._collection.count() if db._collection else 0
@@ -272,7 +271,7 @@ def load_or_create_vectorstore():
 
             except Exception as e_db_load:
                 print(f"\n❌ LỖI khi load Vector Store có sẵn: {e_db_load}")
-                print(f"   Thử xóa thư mục '{PERSIST_DIRECTORY}' và chạy lại để tạo mới.")
+                print(f"   Thử xóa thư mục '{DB_DIR}' và chạy lại để tạo mới.")
                 return None, embeddings
 
         # ----- Tạo Database mới nếu cần -----
@@ -329,7 +328,7 @@ def load_or_create_vectorstore():
                 db = Chroma.from_documents(
                     documents=docs[:batch_size],
                     embedding=embeddings,
-                    persist_directory=str(PERSIST_DIRECTORY)
+                    persist_directory=str(DB_DIR)
                 )
 
                 # Các batch tiếp theo
@@ -369,11 +368,11 @@ def load_or_create_vectorstore():
                 traceback.print_exc()
 
                 # Xóa thư mục có thể bị tạo dở
-                if os.path.exists(PERSIST_DIRECTORY):
+                if os.path.exists(DB_DIR):
                     try:
                         import shutil
-                        shutil.rmtree(PERSIST_DIRECTORY)
-                        print(f"   Đã xóa thư mục '{PERSIST_DIRECTORY}' có thể bị lỗi.")
+                        shutil.rmtree(DB_DIR)
+                        print(f"   Đã xóa thư mục '{DB_DIR}' có thể bị lỗi.")
                     except:
                         pass
                 return None, embeddings
@@ -402,13 +401,13 @@ def setup_rag_chain(db):
     # 1. LLM Configuration (giữ nguyên thông số production)
     print("\n🤖 [1/3] Đang kết nối với OpenAI...")
     llm = ChatOpenAI(
-        model=OPENAI_LLM_MODEL,
-        temperature=0.05,
-        max_tokens=1500,
-        max_retries=3,
-        timeout=90,
+        model=OPENAI_MODEL,
+        temperature=LLM_TEMPERATURE,
+        max_tokens=LLM_MAX_TOKENS,
+        max_retries=LLM_MAX_RETRIES,
+        timeout=LLM_TIMEOUT,
     )
-    print(f"   ✓ Đã kết nối {OPENAI_LLM_MODEL} (temperature=0.05, max_tokens=1500)")
+    print(f"   ✓ Đã kết nối {OPENAI_MODEL} (temperature={LLM_TEMPERATURE}, max_tokens={LLM_MAX_TOKENS})")
 
     # 2. Retriever
     print("🔍 [2/3] Đang tạo Retriever...")
@@ -679,22 +678,22 @@ TRẢ LỜI (2-3 sản phẩm):"""
     print("   5️⃣  Sắp xếp theo relevance → Chọn top 3 sản phẩm")
     print("   6️⃣  Loại bỏ duplicate + Sắp xếp: Summary → Ingredients")
     print("   7️⃣  Format structured với metadata rõ ràng")
-    print(f"   8️⃣  Context + Question → {OPENAI_LLM_MODEL} → 2-3 sản phẩm CHÍNH XÁC ⚡")
+    print(f"   8️⃣  Context + Question → {OPENAI_MODEL} → 2-3 sản phẩm CHÍNH XÁC ⚡")
 
     return rag_chain
 
 # =============================================================================
-# SELF-TEST HELPERS (dùng cho main.py lifespan để phát hiện lỗi sớm)
+# SELF-TEST HELPERS (dùng cho app/main.py lifespan để phát hiện lỗi sớm)
 # =============================================================================
 def test_llm_connection():
     """
     Gọi thử 1 request nhỏ tới LLM (gpt-4o-mini) để xác nhận model/API key
-    còn hoạt động. KHÔNG tự bắt exception — để caller (main.py lifespan)
+    còn hoạt động. KHÔNG tự bắt exception — để caller (app/main.py lifespan)
     quyết định cách xử lý và lưu lỗi vào state.
     """
     client = get_openai_client()
     client.chat.completions.create(
-        model=OPENAI_LLM_MODEL,
+        model=OPENAI_MODEL,
         messages=[{"role": "user", "content": "ping"}],
         max_tokens=5,
     )

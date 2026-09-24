@@ -17,7 +17,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Tạo các thư mục cần thiết
-RUN mkdir -p data models db_chroma chat_history
+RUN mkdir -p data models db_chroma
 
 # --- FIX SAM2 CONFIG: Tải file config về đúng cấu trúc package ---
 RUN mkdir -p /usr/local/lib/python3.10/site-packages/sam2/configs/sam2.1/
@@ -42,4 +42,4 @@ COPY --chown=1000:1000 . .
 EXPOSE 7860
 
 # Chạy server
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7860"]

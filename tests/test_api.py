@@ -21,46 +21,47 @@ def test_health_check():
     print(f"Response: {json.dumps(response.json(), indent=2, ensure_ascii=False)}")
 
 def test_chat_simple():
-    """Test chat endpoint - câu hỏi đơn giản"""
+    """Test chat endpoint - câu hỏi đơn giản (multipart/form-data, không phải JSON)"""
     print("\n" + "=" * 80)
     print("TEST 2: Chat Simple")
     print("=" * 80)
-    
-    payload = {
-        "question": "Tôi cần kem dưỡng cho da khô nhạy cảm"
-    }
-    
-    response = requests.post(f"{API_URL}/chat", json=payload)
+
+    question = "Tôi cần kem dưỡng cho da khô nhạy cảm"
+    response = requests.post(f"{API_URL}/chat", data={"question": question})
     print(f"Status Code: {response.status_code}")
-    
+
     if response.status_code == 200:
         data = response.json()
-        print(f"\nCâu hỏi: {payload['question']}")
+        print(f"\nCâu hỏi: {question}")
         print(f"Trả lời: {data['answer']}")
         print(f"Thời gian: {data['response_time']}s")
-        print(f"Session ID: {data['session_id']}")
-        return data['session_id']
+        return [
+            {"role": "user", "content": question},
+            {"role": "ai", "content": data['answer']},
+        ]
     else:
         print(f"Error: {response.text}")
         return None
 
-def test_chat_with_context(session_id):
-    """Test chat với context - câu hỏi tiếp theo"""
+def test_chat_with_context(history):
+    """Test chat với context - câu hỏi tiếp theo, truyền conversation_history dạng JSON string"""
     print("\n" + "=" * 80)
     print("TEST 3: Chat With Context")
     print("=" * 80)
-    
-    payload = {
-        "question": "Còn serum thì sao?",
-        "session_id": session_id  # Sử dụng session_id từ câu hỏi trước
-    }
-    
-    response = requests.post(f"{API_URL}/chat", json=payload)
+
+    question = "Còn serum thì sao?"
+    response = requests.post(
+        f"{API_URL}/chat",
+        data={
+            "question": question,
+            "conversation_history": json.dumps(history, ensure_ascii=False),
+        },
+    )
     print(f"Status Code: {response.status_code}")
-    
+
     if response.status_code == 200:
         data = response.json()
-        print(f"\nCâu hỏi: {payload['question']}")
+        print(f"\nCâu hỏi: {question}")
         print(f"Trả lời: {data['answer']}")
         print(f"Thời gian: {data['response_time']}s")
 
@@ -134,11 +135,11 @@ def main():
         test_health_check()
         
         # Test 2: Chat đơn giản
-        session_id = test_chat_simple()
-        
+        history = test_chat_simple()
+
         # Test 3: Chat với context
-        if session_id:
-            test_chat_with_context(session_id)
+        if history:
+            test_chat_with_context(history)
         
         # Test 4 & 5: Image analysis (cần có file ảnh)
         # Thay đổi đường dẫn này thành ảnh thật của bạn
@@ -152,7 +153,7 @@ def main():
         
     except requests.exceptions.ConnectionError:
         print("\n❌ KHÔNG THỂ KẾT NỐI ĐẾN SERVER!")
-        print("Vui lòng chạy server trước: python api.py")
+        print("Vui lòng chạy server trước: uvicorn app.main:app --reload")
     except Exception as e:
         print(f"\n❌ LỖI: {e}")
 
