@@ -1,3 +1,13 @@
+---
+title: Skinalyze API
+emoji: 🧴
+colorFrom: pink
+colorTo: purple
+sdk: docker
+pinned: false
+app_port: 7860
+---
+
 # Skinalyze API
 
 RESTful API for an AI-powered dermatology analysis and cosmetics recommendation system, designed as the AI backend behind a NestJS service (NestJS owns users/sessions and calls this API to get analysis and recommendation results).
@@ -317,7 +327,7 @@ The server runs at `http://localhost:7860`.
 
 ### Deploying to Hugging Face Spaces
 
-The repo is pre-configured for Spaces (`sdk: docker`, `app_port: 7860` — normally declared in a YAML front matter block at the top of this file).
+The repo is pre-configured for Spaces (`sdk: docker`, `app_port: 7860` — see the YAML front matter block at the top of this file).
 
 1. Create a new Space, selecting the **Docker** SDK.
 2. Push this repo to the Space (via Git remote or drag-and-drop in the web UI).
