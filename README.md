@@ -99,6 +99,7 @@ cp .env.example .env
 | `OPENAI_API_KEY` | ✅ | — |
 | `OPENAI_MODEL` | ❌ | `gpt-4o-mini` |
 | `EMBEDDING_MODEL` | ❌ | `sentence-transformers/all-MiniLM-L6-v2` |
+| `HF_TOKEN` | ❌ | — (tránh cảnh báo rate limit khi tải `EMBEDDING_MODEL` lần đầu — xem [hướng dẫn lấy token](https://huggingface.co/settings/tokens)) |
 | `LLM_TEMPERATURE` | ❌ | `0.05` |
 | `LLM_MAX_TOKENS` | ❌ | `1500` |
 | `LLM_MAX_RETRIES` | ❌ | `3` |
