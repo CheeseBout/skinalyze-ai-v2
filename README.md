@@ -60,7 +60,7 @@ skinalyze/
 │   └── routes/
 │       ├── health.py             # GET /, GET /health
 │       ├── chat.py                # POST /chat
-│       ├── analysis.py             # POST /analyze-image, /analyze-image-base64
+│       ├── analysis.py             # POST /analyze-image
 │       └── disease.py               # POST /api/classification-disease, /api/segmentation-disease, /api/face-detection
 ├── data/
 │   ├── fixed_cosmetic.csv    # Dữ liệu sản phẩm gốc
@@ -168,9 +168,7 @@ Nếu câu hỏi chứa tên bệnh da đã hỗ trợ (xem bảng bên dưới)
 
 **POST** `/analyze-image` — `multipart/form-data`: `image` (file, bắt buộc), `additional_text` (tuỳ chọn)
 
-**POST** `/analyze-image-base64` — JSON: `{"image_base64": "...", "additional_text": "..."}`
-
-Cả hai dùng classifier EfficientNet-B0 tự host để xác định tình trạng da (không gọi vision model bên thứ 3 — các model đó tự từ chối phân tích ảnh khuôn mặt người thật), rồi truyền kết quả qua RAG chain để tư vấn sản phẩm bằng văn bản.
+Dùng classifier EfficientNet-B0 tự host để xác định tình trạng da (không gọi vision model bên thứ 3 — các model đó tự từ chối phân tích ảnh khuôn mặt người thật), rồi truyền kết quả qua RAG chain để tư vấn sản phẩm bằng văn bản.
 
 ```json
 {

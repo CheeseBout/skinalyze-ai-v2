@@ -767,10 +767,9 @@ def check_severity(analysis: str) -> bool:
 # Model vision (OpenAI, và trước đó là Gemini) đều tự từ chối mô tả ảnh
 # khuôn mặt người thật dù đổi prompt nhiều cách — refusal xảy ra ở tầng
 # model, không phải bug hay safety filter có thể nới lỏng. Toàn bộ phân
-# tích ảnh (/chat, /analyze-image, /analyze-image-base64) dùng classifier
-# EfficientNet-B0 tự host (không gọi API bên ngoài, không có rủi ro bị từ
-# chối) để xác định tình trạng da, chỉ dùng LLM cho bước tư vấn sản phẩm
-# bằng văn bản.
+# tích ảnh (/chat, /analyze-image) dùng classifier EfficientNet-B0 tự host
+# (không gọi API bên ngoài, không có rủi ro bị từ chối) để xác định tình
+# trạng da, chỉ dùng LLM cho bước tư vấn sản phẩm bằng văn bản.
 DISEASE_CLASS_TO_VIETNAMESE = {
     'Acne': 'Mụn (Acne)',
     'Actinic_Keratosis': 'Dày sừng ánh sáng (Actinic Keratosis)',

@@ -4,7 +4,6 @@ Script test API - Ví dụ cách gọi API từ Python
 
 import requests
 import json
-import base64
 from pathlib import Path
 
 # URL của API server
@@ -96,35 +95,6 @@ def test_image_upload(image_path):
             print(f"\n{result['severity_warning']}")
         print(f"\nThời gian: {result['response_time']}s")
 
-def test_image_base64(image_path):
-    """Test gửi ảnh dạng base64"""
-    print("\n" + "=" * 80)
-    print("TEST 5: Image Base64 Analysis")
-    print("=" * 80)
-    
-    if not Path(image_path).exists():
-        print(f"File không tồn tại: {image_path}")
-        print("Bỏ qua test này.")
-        return
-    
-    # Đọc và encode ảnh thành base64
-    with open(image_path, 'rb') as f:
-        image_base64 = base64.b64encode(f.read()).decode('utf-8')
-    
-    payload = {
-        "image_base64": image_base64,
-        "additional_text": "Phân tích da của tôi"
-    }
-    
-    response = requests.post(f"{API_URL}/analyze-image-base64", json=payload)
-    print(f"Status Code: {response.status_code}")
-    
-    if response.status_code == 200:
-        result = response.json()
-        print(f"\nPhân tích: {result['skin_analysis'][:200]}...")
-        print(f"Tư vấn: {result['product_recommendation'][:200]}...")
-        print(f"Thời gian: {result['response_time']}s")
-
 def main():
     """Chạy tất cả các test"""
     print("\nBẮT ĐẦU TEST API")
@@ -141,11 +111,10 @@ def main():
         if history:
             test_chat_with_context(history)
         
-        # Test 4 & 5: Image analysis (cần có file ảnh)
+        # Test 4: Image analysis (cần có file ảnh)
         # Thay đổi đường dẫn này thành ảnh thật của bạn
         test_image_path = r"D:\rag-cosmetic-chatbot\sample_skin.jpg"
         test_image_upload(test_image_path)
-        test_image_base64(test_image_path)
         
         print("\n" + "=" * 80)
         print("HOÀN THÀNH TẤT CẢ TEST!")

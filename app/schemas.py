@@ -15,11 +15,6 @@ class ChatResponse(BaseModel):
     timestamp: str
 
 
-class ImageAnalysisRequest(BaseModel):
-    image_base64: str
-    additional_text: Optional[str] = None
-
-
 class ImageAnalysisResponse(BaseModel):
     skin_analysis: str
     product_recommendation: str
