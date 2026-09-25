@@ -1,4 +1,4 @@
-# 🚀 Hướng dẫn triển khai
+# Hướng dẫn triển khai
 
 ## Chuẩn bị
 
@@ -41,12 +41,12 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
 > Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)** (workload
 > "Desktop development with C++") trước khi `pip install`.
 
-## 🔒 Bảo mật API key
+## Bảo mật API key
 
 **KHÔNG BAO GIỜ** commit file `.env` hoặc hard-code API key trong code:
 
 ```python
-# ❌ SAI
+# SAI
 OPENAI_API_KEY = "sk-..."  # NGUY HIỂM!
 ```
 
@@ -62,7 +62,7 @@ Nếu vô tình commit API key lên Git:
 - [ ] **Rate limiting / Authentication:** endpoint hiện không có auth — nếu expose public, thêm API key/JWT hoặc rate limit ở tầng gateway/NestJS
 - [ ] **Model weights:** đảm bảo Git LFS đã pull đầy đủ `models/*.pt`, `models/*.pth` trước khi build image
 
-## 🆘 Troubleshooting
+## Troubleshooting
 
 | Vấn đề | Nguyên nhân thường gặp |
 |---|---|

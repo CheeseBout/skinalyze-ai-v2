@@ -22,7 +22,7 @@ from app.state import state
 async def lifespan(app: FastAPI):
     # Startup logic
     print("\n" + "=" * 80)
-    print("🚀 STARTING AI DERMATOLOGY & COSMETIC API SERVER")
+    print("STARTING AI DERMATOLOGY & COSMETIC API SERVER")
     print("=" * 80)
 
     state.classification_model = load_classification_model()
@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
         setup_api_key()
     except Exception as e:
         state.llm_error = str(e)
-        print(f"\n❌ API key setup failed: {e}\n")
+        print(f"\nAPI key setup failed: {e}\n")
     else:
         # --- 2. Vector store + RAG chain ---
         try:
@@ -43,10 +43,10 @@ async def lifespan(app: FastAPI):
                 raise RuntimeError("Vector store not initialized")
             state.vectorstore = db
             state.rag_chain = setup_rag_chain(db)
-            print("\n✅ RAG chain constructed")
+            print("\nRAG chain constructed")
         except Exception as e:
             state.llm_error = str(e)
-            print(f"\n❌ Error initializing RAG chain: {e}\n")
+            print(f"\nError initializing RAG chain: {e}\n")
 
         # --- 3. LLM self-test (chỉ chạy nếu rag_chain đã dựng xong) ---
         # Constructing ChatOpenAI() KHÔNG gọi API thật, nên phải tự test
@@ -54,18 +54,18 @@ async def lifespan(app: FastAPI):
         # ngay lúc khởi động, thay vì chờ user gặp lỗi 500.
         if state.rag_chain is not None:
             try:
-                print(f"\n🧪 Testing LLM connection ({state.llm_model})...")
+                print(f"\nTesting LLM connection ({state.llm_model})...")
                 test_llm_connection()
                 state.llm_ready = True
                 state.llm_error = None
-                print("✅ LLM self-test passed — RAG Chatbot ready")
+                print("LLM self-test passed — RAG Chatbot ready")
             except Exception as e:
                 state.llm_ready = False
                 state.llm_error = str(e)
-                print(f"❌ LLM self-test failed: {e}")
+                print(f"LLM self-test failed: {e}")
 
-    print("\n✅ Server ready!")
-    print("📚 API Documentation: http://localhost:8000/docs")
+    print("\nServer ready!")
+    print("API Documentation: http://localhost:8000/docs")
     print("=" * 80 + "\n")
 
     yield

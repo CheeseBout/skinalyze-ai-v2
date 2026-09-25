@@ -31,22 +31,22 @@ def get_skin_types(row):
 
 def main():
     print("\n" + "=" * 80)
-    print("🔄 CẬP NHẬT DATA MỚI")
+    print("CẬP NHẬT DATA MỚI")
     print("=" * 80)
     
     # 1. Kiểm tra CSV
     if not CSV_FILE.exists():
-        print(f"❌ Không tìm thấy file CSV: {CSV_FILE}")
+        print(f"Không tìm thấy file CSV: {CSV_FILE}")
         return
     
     # 2. Đọc CSV
-    print(f"\n📖 Đang đọc CSV: {CSV_FILE.name}...")
+    print(f"\nĐang đọc CSV: {CSV_FILE.name}...")
     df = pd.read_csv(CSV_FILE, encoding='utf-8')
-    print(f"✅ Đọc thành công {len(df)} sản phẩm")
-    print(f"📝 Các cột: {list(df.columns)}\n")
+    print(f"Đọc thành công {len(df)} sản phẩm")
+    print(f"Các cột: {list(df.columns)}\n")
     
     # 3. Tạo chunks với format giống file cũ
-    print("🔨 Đang tạo chunks...")
+    print("Đang tạo chunks...")
     chunks = []
     
     for idx, row in df.iterrows():
@@ -99,27 +99,27 @@ Ingredients: {ingredients}
     if CHUNKS_FILE.exists():
         backup_file = CHUNKS_FILE.with_suffix('.txt.backup')
         shutil.copy(CHUNKS_FILE, backup_file)
-        print(f"\n💾 Đã backup file cũ → {backup_file.name}")
+        print(f"\nĐã backup file cũ → {backup_file.name}")
     
     # 5. Ghi file mới
-    print(f"\n💾 Đang ghi {len(chunks)} chunks vào: {CHUNKS_FILE.name}...")
+    print(f"\nĐang ghi {len(chunks)} chunks vào: {CHUNKS_FILE.name}...")
     with open(CHUNKS_FILE, 'w', encoding='utf-8') as f:
         f.write('\n'.join(chunks))
     
     # 6. Xóa database cũ
     if DB_DIR.exists():
-        print(f"\n🗑️  Đang xóa database cũ...")
+        print(f"\nĐang xóa database cũ...")
         shutil.rmtree(DB_DIR)
-        print("✅ Đã xóa database cũ!")
+        print("Đã xóa database cũ!")
     
     # 7. Thống kê
     file_size = CHUNKS_FILE.stat().st_size / (1024 * 1024)
-    print(f"\n✅ CẬP NHẬT HOÀN TẤT!")
-    print(f"📊 Thống kê:")
+    print(f"\nCẬP NHẬT HOÀN TẤT!")
+    print(f"Thống kê:")
     print(f"   • Sản phẩm: {len(df)}")
     print(f"   • Chunks: {len(chunks)}")
     print(f"   • Kích thước: {file_size:.2f} MB")
-    print(f"\n💡 Bước tiếp theo:")
+    print(f"\nBước tiếp theo:")
     print(f"   1. Khởi động lại server (uvicorn app.main:app)")
     print(f"   2. Server sẽ tự động tạo database mới từ chunks khi startup")
     print("=" * 80)

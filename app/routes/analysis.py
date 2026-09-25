@@ -18,7 +18,7 @@ from app.state import state
 router = APIRouter()
 
 LOW_CONFIDENCE_WARNING = (
-    "⚠️ Độ tin cậy nhận diện thấp — kết quả chỉ mang tính tham khảo, "
+    "Độ tin cậy nhận diện thấp — kết quả chỉ mang tính tham khảo, "
     "nên tham khảo thêm ý kiến bác sĩ da liễu để xác nhận."
 )
 

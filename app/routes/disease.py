@@ -46,7 +46,7 @@ async def classify_skin_disease(
                          detail="No face detected. Please upload a clear image of a face for facial analysis."
                      )
             else:
-                print("⚠️ Face detector skipped (not loaded)")
+                print("Face detector skipped (not loaded)")
 
         input_tensor = IMAGE_TRANSFORMS['classification'](image).unsqueeze(0).to(device)
 
@@ -158,7 +158,7 @@ async def face_detection(file: UploadFile = File(...)) -> Dict[str, bool]:
     Returns: {"has_face": boolean}
     """
     if state.face_detector is None:
-        print("⚠️  Face detection model not loaded")
+        print("Face detection model not loaded")
         return {"has_face": True}
     try:
         content = await file.read()
@@ -167,5 +167,5 @@ async def face_detection(file: UploadFile = File(...)) -> Dict[str, bool]:
 
         return {"has_face": detect_faces(state.face_detector, image_np)}
     except Exception as e:
-        print(f"❌ Error during face detection: {e}")
+        print(f"Error during face detection: {e}")
         return {"has_face": False}

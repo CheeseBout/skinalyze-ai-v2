@@ -39,7 +39,7 @@ async def chat_endpoint(
             try:
                 history_list = json.loads(conversation_history)
             except json.JSONDecodeError:
-                print("⚠️ Failed to parse conversation_history JSON")
+                print("Failed to parse conversation_history JSON")
                 history_list = []
 
         # 2. Image analysis via EfficientNet classifier (If image is provided)

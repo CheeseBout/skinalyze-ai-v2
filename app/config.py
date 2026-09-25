@@ -15,12 +15,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- Force UTF-8 stdout/stderr ---
-# Logging trong toàn bộ app dùng emoji (🚀 ✅ ❌ ⚠️ ...). Trên Windows, khi
-# stdout không phải console UTF-8 (bị redirect ra file, chạy nền, chạy như
-# service...), Python fallback về codepage mặc định của hệ thống (thường là
-# cp1252) và crash ngay với UnicodeEncodeError khi gặp emoji. reconfigure()
-# có từ Python 3.7+; bọc try/except vì 1 số stream (vd. khi bị pipe qua công
-# cụ khác) không hỗ trợ.
+# Logging và prompt template trong toàn bộ app dùng tiếng Việt có dấu. Trên
+# Windows, khi stdout không phải console UTF-8 (bị redirect ra file, chạy
+# nền, chạy như service...), Python fallback về codepage mặc định của hệ
+# thống (thường là cp1252, không cover được nhiều ký tự tiếng Việt) và crash
+# ngay với UnicodeEncodeError. reconfigure() có từ Python 3.7+; bọc try/except
+# vì 1 số stream (vd. khi bị pipe qua công cụ khác) không hỗ trợ.
 for _stream in (sys.stdout, sys.stderr):
     try:
         _stream.reconfigure(encoding="utf-8")

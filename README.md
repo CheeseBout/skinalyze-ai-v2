@@ -8,32 +8,32 @@ pinned: false
 app_port: 7860
 ---
 
-# 🧴 Skinalyze API
+# Skinalyze API
 
 API RESTful cho hệ thống phân tích da liễu và tư vấn mỹ phẩm bằng AI, được thiết kế làm backend AI đứng sau một backend NestJS (NestJS quản lý user/session, gọi API này để lấy kết quả phân tích và tư vấn).
 
 Ba khối chức năng chính:
 
-- 🔬 **Phân loại bệnh da** từ ảnh bằng EfficientNet-B0 tự host — 11 lớp (mụn, chàm, vảy nến, trứng cá đỏ, nấm da...)
-- ✂️ **Khoanh vùng tổn thương** (segmentation) bằng SAM2 — MedSAM2 fine-tune cho da liễu
-- 💬 **Chatbot RAG tư vấn mỹ phẩm** — OpenAI `gpt-4o-mini` + ChromaDB, truy vấn trên dữ liệu sản phẩm trong `data/`
+- **Phân loại bệnh da** từ ảnh bằng EfficientNet-B0 tự host — 11 lớp (mụn, chàm, vảy nến, trứng cá đỏ, nấm da...)
+- **Khoanh vùng tổn thương** (segmentation) bằng SAM2 — MedSAM2 fine-tune cho da liễu
+- **Chatbot RAG tư vấn mỹ phẩm** — OpenAI `gpt-4o-mini` + ChromaDB, truy vấn trên dữ liệu sản phẩm trong `data/`
 
 Toàn bộ API **stateless**: không lưu session hay chat history phía server — client (NestJS) tự quản lý và gửi kèm `conversation_history` nếu cần.
 
-## 📋 Mục lục
+## Mục lục
 
-- [Tech stack](#-tech-stack)
-- [Cấu trúc project](#-cấu-trúc-project)
-- [Cài đặt](#-cài-đặt)
-- [Chạy server](#-chạy-server)
-- [API Endpoints](#-api-endpoints)
-- [Ví dụ sử dụng](#-ví-dụ-sử-dụng)
-- [Test](#-test)
-- [Cập nhật dữ liệu sản phẩm](#-cập-nhật-dữ-liệu-sản-phẩm)
-- [Triển khai](#-triển-khai)
-- [Troubleshooting](#-troubleshooting)
+- [Tech stack](#tech-stack)
+- [Cấu trúc project](#cấu-trúc-project)
+- [Cài đặt](#cài-đặt)
+- [Chạy server](#chạy-server)
+- [API Endpoints](#api-endpoints)
+- [Ví dụ sử dụng](#ví-dụ-sử-dụng)
+- [Test](#test)
+- [Cập nhật dữ liệu sản phẩm](#cập-nhật-dữ-liệu-sản-phẩm)
+- [Triển khai](#triển-khai)
+- [Troubleshooting](#troubleshooting)
 
-## 🛠 Tech stack
+## Tech stack
 
 | Thành phần | Công nghệ |
 |---|---|
@@ -46,7 +46,7 @@ Toàn bộ API **stateless**: không lưu session hay chat history phía server 
 | Face detection | OpenCV Haar cascade (bundled trong `opencv-python-headless`, không cần model rời) |
 | Deploy | Docker, chạy trên Hugging Face Spaces |
 
-## 📁 Cấu trúc project
+## Cấu trúc project
 
 ```
 skinalyze/
@@ -73,7 +73,7 @@ skinalyze/
 └── requirements.txt
 ```
 
-## 🔧 Cài đặt
+## Cài đặt
 
 **Yêu cầu Python 3.12.10** (xem [.python-version](.python-version)).
 
@@ -96,18 +96,18 @@ cp .env.example .env
 
 | Biến | Bắt buộc | Mặc định |
 |---|---|---|
-| `OPENAI_API_KEY` | ✅ | — |
-| `OPENAI_MODEL` | ❌ | `gpt-4o-mini` |
-| `EMBEDDING_MODEL` | ❌ | `sentence-transformers/all-MiniLM-L6-v2` |
-| `HF_TOKEN` | ❌ | — (tránh cảnh báo rate limit khi tải `EMBEDDING_MODEL` lần đầu — xem [hướng dẫn lấy token](https://huggingface.co/settings/tokens)) |
-| `LLM_TEMPERATURE` | ❌ | `0.05` |
-| `LLM_MAX_TOKENS` | ❌ | `1500` |
-| `LLM_MAX_RETRIES` | ❌ | `3` |
-| `LLM_TIMEOUT` | ❌ | `90` |
-| `USD_TO_VND` | ❌ | `26349` |
-| `CORS_ORIGINS` | ❌ | `*` (comma-separated nếu giới hạn domain) |
+| `OPENAI_API_KEY` | Có | — |
+| `OPENAI_MODEL` | Không | `gpt-4o-mini` |
+| `EMBEDDING_MODEL` | Không | `sentence-transformers/all-MiniLM-L6-v2` |
+| `HF_TOKEN` | Không | — (tránh cảnh báo rate limit khi tải `EMBEDDING_MODEL` lần đầu — xem [hướng dẫn lấy token](https://huggingface.co/settings/tokens)) |
+| `LLM_TEMPERATURE` | Không | `0.05` |
+| `LLM_MAX_TOKENS` | Không | `1500` |
+| `LLM_MAX_RETRIES` | Không | `3` |
+| `LLM_TIMEOUT` | Không | `90` |
+| `USD_TO_VND` | Không | `26349` |
+| `CORS_ORIGINS` | Không | `*` (comma-separated nếu giới hạn domain) |
 
-## 🚀 Chạy server
+## Chạy server
 
 ```bash
 # Development (auto-reload)
@@ -121,7 +121,7 @@ Server chạy tại `http://localhost:8000`. Swagger UI: `http://localhost:8000/
 
 > Lần chạy đầu tiên sẽ tự tải embedding model và build vector store từ `data/product_chunks.txt` vào `db_chroma/` (mất vài phút) — các lần sau load lại từ cache.
 
-## 📚 API Endpoints
+## API Endpoints
 
 ### Health Check
 
@@ -149,9 +149,9 @@ Server chạy tại `http://localhost:8000`. Swagger UI: `http://localhost:8000/
 
 | Field | Bắt buộc | Ghi chú |
 |---|---|---|
-| `question` | ✅ | Câu hỏi của người dùng |
-| `conversation_history` | ❌ | Chuỗi JSON: `[{"role":"user","content":"..."},{"role":"ai","content":"..."}]` — chỉ 3 lượt gần nhất được dùng làm ngữ cảnh |
-| `image` | ❌ | File ảnh — nếu có, hệ thống chạy classifier để lấy thêm ngữ cảnh tình trạng da trước khi trả lời |
+| `question` | Có | Câu hỏi của người dùng |
+| `conversation_history` | Không | Chuỗi JSON: `[{"role":"user","content":"..."},{"role":"ai","content":"..."}]` — chỉ 3 lượt gần nhất được dùng làm ngữ cảnh |
+| `image` | Không | File ảnh — nếu có, hệ thống chạy classifier để lấy thêm ngữ cảnh tình trạng da trước khi trả lời |
 
 Nếu câu hỏi chứa tên bệnh da đã hỗ trợ (xem bảng bên dưới), hệ thống tự ưu tiên tìm sản phẩm phù hợp cho loại da tương ứng, bỏ qua lịch sử hội thoại để tránh nhầm lẫn.
 
@@ -239,7 +239,7 @@ Cả hai dùng classifier EfficientNet-B0 tự host để xác định tình tr�
 
 Nếu face detector chưa load được, endpoint trả `has_face: true` (fail-open) để không chặn luồng của client.
 
-## 💻 Ví dụ sử dụng
+## Ví dụ sử dụng
 
 ### cURL
 
@@ -289,14 +289,14 @@ fetch("http://localhost:8000/chat", { method: "POST", body: formData })
   .then((data) => console.log(data));
 ```
 
-## 🧪 Test
+## Test
 
 ```bash
 # Server phải đang chạy tại http://localhost:8000
 python tests/test_api.py
 ```
 
-## 🔄 Cập nhật dữ liệu sản phẩm
+## Cập nhật dữ liệu sản phẩm
 
 Khi thay đổi `data/fixed_cosmetic.csv`, chạy lại script này để tạo lại `data/product_chunks.txt` và xoá vector store cũ (sẽ tự build lại từ chunks mới khi server khởi động):
 
@@ -304,7 +304,7 @@ Khi thay đổi `data/fixed_cosmetic.csv`, chạy lại script này để tạo 
 python scripts/update_data.py
 ```
 
-## 🚢 Triển khai
+## Triển khai
 
 Repo được cấu hình để deploy trực tiếp lên **Hugging Face Spaces** (Docker SDK — xem header YAML ở đầu file này) — chỉ cần đặt `OPENAI_API_KEY` trong **Settings → Repository secrets** của Space.
 
@@ -317,7 +317,7 @@ docker run -p 7860:7860 --env-file .env skinalyze
 
 Xem [DEPLOY.md](DEPLOY.md) để biết chi tiết đầy đủ (checklist production, bảo mật API key, xử lý sự cố khi deploy).
 
-## 🆘 Troubleshooting
+## Troubleshooting
 
 | Vấn đề | Kiểm tra |
 |---|---|

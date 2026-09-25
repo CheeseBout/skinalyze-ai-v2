@@ -15,11 +15,11 @@ from app.config import CLASSIFICATION_MODEL_PATH, SEGMENTATION_MODEL_PATH
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-# ✅ UPDATED: 11 classes (khớp với training notebook)
+# UPDATED: 11 classes (khớp với training notebook)
 SKIN_CLASSES = [
     'Acne',
     'Actinic_Keratosis',
-    'Drug_Eruption',  # ← ✅ THÊM LẠI
+    'Drug_Eruption',  # ← THÊM LẠI
     'Eczema',
     'Normal',
     'Psoriasis',
@@ -45,12 +45,12 @@ IMAGE_TRANSFORMS = {
 # =============================================================================
 def load_classification_model():
     """
-    ✅ FIXED: Load EfficientNet-B0 với architecture khớp training notebook
+    FIXED: Load EfficientNet-B0 với architecture khớp training notebook
     Architecture: 1280 → [Dropout 0.4] → 512 → [BN + ReLU + Dropout 0.3] → 256 → [BN + ReLU] → 11
     """
     model_path = str(CLASSIFICATION_MODEL_PATH)
     if not os.path.exists(model_path):
-        print(f"⚠️  Classification model not found at {model_path}")
+        print(f"Classification model not found at {model_path}")
         return None
 
     try:
@@ -59,7 +59,7 @@ def load_classification_model():
 
         # 1. If checkpoint is a full model object (unlikely)
         if not isinstance(checkpoint, dict):
-            print("ℹ️  Checkpoint is a full model object.")
+            print("Checkpoint is a full model object.")
             model = checkpoint
             model.to(device)
             model.eval()
@@ -68,13 +68,13 @@ def load_classification_model():
         # 2. Extract state_dict
         state_dict = checkpoint.get('model_state_dict', checkpoint)
 
-        # ✅ Get architecture config from checkpoint
+        # Get architecture config from checkpoint
         config = checkpoint.get('config', {})
         dropout1 = config.get('dropout1', 0.4)  # Default from notebook
         dropout2 = config.get('dropout2', 0.3)  # Default from notebook
         num_classes = checkpoint.get('num_classes', len(SKIN_CLASSES))
 
-        print(f"ℹ️  Loading model with config:")
+        print(f"Loading model with config:")
         print(f"   - Num classes: {num_classes}")
         print(f"   - Dropout 1: {dropout1}")
         print(f"   - Dropout 2: {dropout2}")
@@ -82,7 +82,7 @@ def load_classification_model():
         # Initialize EfficientNet-B0 base
         model = models.efficientnet_b0(weights=None)
 
-        # ✅ Reconstruct EXACT classifier from training notebook
+        # Reconstruct EXACT classifier from training notebook
         num_features = 1280  # EfficientNet-B0 default
 
         model.classifier = nn.Sequential(
@@ -102,13 +102,13 @@ def load_classification_model():
         model.to(device)
         model.eval()
 
-        print(f"✅ Classification model loaded successfully")
+        print(f"Classification model loaded successfully")
         print(f"   Architecture: 1280 → 512 → 256 → {num_classes}")
 
         return model
 
     except Exception as e:
-        print(f"❌ Error loading classification model: {e}")
+        print(f"Error loading classification model: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -117,7 +117,7 @@ def load_segmentation_model():
     """Load SAM2 segmentation model (Fixed Relative Path for Hydra)"""
     model_path = str(SEGMENTATION_MODEL_PATH)
     if not os.path.exists(model_path):
-        print(f"⚠️  Segmentation model not found")
+        print(f"Segmentation model not found")
         return None
 
     try:
@@ -128,7 +128,7 @@ def load_segmentation_model():
         checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 
         config_file = "configs/sam2.1/sam2.1_hiera_t.yaml"
-        print(f"ℹ️ Loading SAM2 with config: {config_file}")
+        print(f"Loading SAM2 with config: {config_file}")
 
         sam2_model = build_sam2(
             config_file=config_file,
@@ -142,11 +142,11 @@ def load_segmentation_model():
             sam2_model.load_state_dict(checkpoint['model_state_dict'], strict=False)
 
         predictor = SAM2ImagePredictor(sam2_model)
-        print("✅ SAM2 segmentation model loaded")
+        print("SAM2 segmentation model loaded")
         return predictor
 
     except Exception as e:
-        print(f"❌ Error loading segmentation model: {e}")
+        print(f"Error loading segmentation model: {e}")
         return None
 
 def load_face_detection_model():
@@ -156,10 +156,10 @@ def load_face_detection_model():
         detector = cv2.CascadeClassifier(cascade_path)
         if detector.empty():
             raise RuntimeError(f"Failed to load cascade file at {cascade_path}")
-        print("✅ Face detection model loaded")
+        print("Face detection model loaded")
         return detector
     except Exception as e:
-        print(f"❌ Error loading face detection model: {e}")
+        print(f"Error loading face detection model: {e}")
         return None
 
 def detect_faces(detector: cv2.CascadeClassifier, image_np: np.ndarray) -> bool:

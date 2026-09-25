@@ -72,7 +72,7 @@ def test_image_upload(image_path):
     print("=" * 80)
     
     if not Path(image_path).exists():
-        print(f"⚠️  File không tồn tại: {image_path}")
+        print(f"File không tồn tại: {image_path}")
         print("Bỏ qua test này.")
         return
     
@@ -103,7 +103,7 @@ def test_image_base64(image_path):
     print("=" * 80)
     
     if not Path(image_path).exists():
-        print(f"⚠️  File không tồn tại: {image_path}")
+        print(f"File không tồn tại: {image_path}")
         print("Bỏ qua test này.")
         return
     
@@ -127,8 +127,8 @@ def test_image_base64(image_path):
 
 def main():
     """Chạy tất cả các test"""
-    print("\n🧪 BẮT ĐẦU TEST API")
-    print("⚠️  Đảm bảo server đang chạy tại: http://localhost:8000")
+    print("\nBẮT ĐẦU TEST API")
+    print("Đảm bảo server đang chạy tại: http://localhost:8000")
     
     try:
         # Test 1: Health check
@@ -148,14 +148,14 @@ def main():
         test_image_base64(test_image_path)
         
         print("\n" + "=" * 80)
-        print("✅ HOÀN THÀNH TẤT CẢ TEST!")
+        print("HOÀN THÀNH TẤT CẢ TEST!")
         print("=" * 80)
         
     except requests.exceptions.ConnectionError:
-        print("\n❌ KHÔNG THỂ KẾT NỐI ĐẾN SERVER!")
+        print("\nKHÔNG THỂ KẾT NỐI ĐẾN SERVER!")
         print("Vui lòng chạy server trước: uvicorn app.main:app --reload")
     except Exception as e:
-        print(f"\n❌ LỖI: {e}")
+        print(f"\nLỖI: {e}")
 
 if __name__ == "__main__":
     main()
