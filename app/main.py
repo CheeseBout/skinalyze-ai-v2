@@ -93,9 +93,5 @@ app.add_middleware(
 for router in routers:
     app.include_router(router)
 
-# =============================================================================
-# RUN SERVER
-# =============================================================================
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000)
+# Run with `python main.py` (repo root) or `uvicorn app.main:app` — not by
+# executing this file directly, which breaks the `app` package import.
